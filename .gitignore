@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Build output
+dist/
+
+# Environment
+.env
+.venv/
+
+# Claude Code
+.claude/plans/
+.claude/settings.local.json

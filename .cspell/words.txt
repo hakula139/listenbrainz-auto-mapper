@@ -1,0 +1,11 @@
+dotenv
+httpx
+liblistenbrainz
+listenbrainz
+mbid
+msid
+musicbrainz
+musicbrainzngs
+pycache
+pyproject
+venv
