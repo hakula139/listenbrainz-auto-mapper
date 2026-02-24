@@ -148,7 +148,7 @@ class Translator:
         if CACHE_FILE.exists():
             try:
                 data = json.loads(CACHE_FILE.read_text(encoding='utf-8'))
-            except json.JSONDecodeError, ValueError:
+            except (json.JSONDecodeError, ValueError):
                 return {}
             if isinstance(data, dict):
                 return cast(dict[str, str], data)
