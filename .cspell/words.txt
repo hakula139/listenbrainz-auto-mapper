@@ -6,6 +6,9 @@ mbid
 msid
 musicbrainz
 musicbrainzngs
+mypy
 pycache
 pyproject
+scrobblers
 venv
+yorushika
