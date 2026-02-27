@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -13,10 +12,16 @@ import httpx
 BASE_URL = 'https://api.listenbrainz.org'
 
 
-def should_skip_ssl_verify() -> bool:
-    """Skip SSL verification when behind a local MITM proxy (e.g., Clash)."""
-    proxy = os.environ.get('HTTPS_PROXY', os.environ.get('https_proxy', ''))
-    return proxy.startswith('http://127.0.0.1') or proxy.startswith('http://localhost')
+def create_http_client(**kwargs: Any) -> httpx.Client:
+    """Create an httpx client with retry transport and SSL verification disabled."""
+    transport = httpx.HTTPTransport(retries=3)
+    defaults: dict[str, Any] = {
+        'transport': transport,
+        'verify': False,
+        'timeout': 30.0,
+    }
+    defaults.update(kwargs)
+    return httpx.Client(**defaults)
 
 
 @dataclass(frozen=True)
@@ -54,11 +59,9 @@ class Listen:
 class ListenBrainzClient:
     def __init__(self, token: str) -> None:
         self._token = token
-        self._client = httpx.Client(
+        self._client = create_http_client(
             base_url=BASE_URL,
             headers={'Authorization': f'Token {token}'},
-            timeout=30.0,
-            verify=not should_skip_ssl_verify(),
         )
 
     def __enter__(self) -> ListenBrainzClient:

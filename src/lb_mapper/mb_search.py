@@ -7,9 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, TypedDict, cast
 
-import httpx
-
-from lb_mapper.lb_client import should_skip_ssl_verify
+from lb_mapper.lb_client import create_http_client
 
 
 MB_BASE_URL = 'https://musicbrainz.org/ws/2'
@@ -19,11 +17,9 @@ AUTO_ACCEPT_SCORE = 90
 # Rate limiting: 1 request per second
 _last_request_time: float = 0.0
 
-_client = httpx.Client(
+_client = create_http_client(
     base_url=MB_BASE_URL,
     headers={'User-Agent': USER_AGENT, 'Accept': 'application/json'},
-    timeout=30.0,
-    verify=not should_skip_ssl_verify(),
 )
 
 # Patterns stripped from track names to improve matching
