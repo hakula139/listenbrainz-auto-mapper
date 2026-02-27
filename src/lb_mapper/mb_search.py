@@ -28,6 +28,15 @@ _STRIP_PATTERNS = [
     r'\s*[-–—]\s*(TV|Radio|Album|Single|Live|Acoustic|Orchestral|Instrumental|Original|Deluxe|Bonus)\s+\w*\s*[-–—]?\s*$',
     r'\s*\((TV|Radio|Album|Single|Live|Acoustic|Orchestral|Instrumental|Original|Deluxe)\s*[^)]*\)\s*$',
     r'\s*\[(TV|Radio|Album|Single|Live|Acoustic|Orchestral|Instrumental|Original|Deluxe)\s*[^]]*\]\s*$',
+    # Arrangement / transcription credits from Apple Music metadata
+    # e.g., "(Arr. Cortot for Piano)", "(Transcr. for Guitar by Rosie Bennet)"
+    r'\s*\(Arr\..*?\)\s*$',
+    r'\s*\[Arr\..*?\]\s*$',
+    r'\s*\(Transcr\..*?\)\s*$',
+    r'\s*\[Transcr\..*?\]\s*$',
+    # Version annotations: "(Version for Solo Piano)", "(Acoustic Guitar Cover)"
+    r'\s*\(Version for [^)]+\)\s*$',
+    r'\s*\([^)]+ Version\)\s*$',
     # Classical: strip trailing movement/tempo markings after colon
     # e.g., "Piano Concerto No. 21: Allegro" → "Piano Concerto No. 21"
     r':\s*(Allegro|Andante|Adagio|Moderato|Presto|Vivace|Largo|Grave|Lento|Scherzo|Minuet|Rondo|Finale)\b.*$',
@@ -40,11 +49,29 @@ _STRIP_PATTERNS = [
 ]
 _STRIP_RE = [re.compile(p, re.IGNORECASE) for p in _STRIP_PATTERNS]
 
+# Patterns stripped from release names (Apple Music conventions not used by MB)
+_RELEASE_STRIP_PATTERNS = [
+    # Apple Music appends "- Single" / "- EP" to release names
+    r'\s*-\s*(Single|EP)\s*$',
+    # Edition annotations: "(Deluxe Version)", "[Special Edition]", etc.
+    r'\s*\((Deluxe|Special|Bonus|Extended)\s*(Version|Edition)?\)\s*$',
+    r'\s*\[(Deluxe|Special|Bonus|Extended)\s*(Version|Edition)?\]\s*$',
+]
+_RELEASE_STRIP_RE = [re.compile(p, re.IGNORECASE) for p in _RELEASE_STRIP_PATTERNS]
+
 
 def normalize_track_name(name: str) -> str:
     """Strip annotations, edit markers, and movement markings from a track name."""
     result = name
     for pattern in _STRIP_RE:
+        result = pattern.sub('', result)
+    return result.strip()
+
+
+def normalize_release_name(name: str) -> str:
+    """Strip Apple Music suffixes like '- Single', '- EP', '(Deluxe Version)'."""
+    result = name
+    for pattern in _RELEASE_STRIP_RE:
         result = pattern.sub('', result)
     return result.strip()
 
@@ -161,6 +188,22 @@ def search_recordings(
     return matches
 
 
+def _track_name_variants(recording: str) -> list[str]:
+    """Return the original track name and its normalized form (if different)."""
+    normalized = normalize_track_name(recording)
+    if normalized != recording and normalized:
+        return [recording, normalized]
+    return [recording]
+
+
+def _release_name_variants(release: str) -> list[str]:
+    """Return the original release name and its normalized form (if different)."""
+    normalized = normalize_release_name(release)
+    if normalized != release and normalized:
+        return [release, normalized]
+    return [release]
+
+
 def find_best_match(
     artist: str,
     recording: str,
@@ -195,11 +238,16 @@ def find_match_by_track_release(
 ) -> RecordingMatch | None:
     """Fallback: search by track + release, require artist match."""
     expected_lower = expected_artist.lower()
-    for track_name in _track_name_variants(recording):
-        results = search_recordings(recording=track_name, release=release, limit=10)
-        for r in results:
-            if expected_lower in r.artist_credit.lower():
-                return r
+    for release_name in _release_name_variants(release):
+        for track_name in _track_name_variants(recording):
+            results = search_recordings(
+                recording=track_name,
+                release=release_name,
+                limit=10,
+            )
+            for r in results:
+                if expected_lower in r.artist_credit.lower():
+                    return r
 
     return None
 
@@ -222,14 +270,6 @@ def find_match_by_track_only(
                 return r
 
     return None
-
-
-def _track_name_variants(recording: str) -> list[str]:
-    """Return the original track name and its normalized form (if different)."""
-    normalized = normalize_track_name(recording)
-    if normalized != recording and normalized:
-        return [recording, normalized]
-    return [recording]
 
 
 def close_client() -> None:
