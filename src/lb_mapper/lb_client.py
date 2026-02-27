@@ -78,16 +78,28 @@ class ListenBrainzClient:
     def fetch_listens(
         self, user: str, count: int = 50, max_ts: int | None = None
     ) -> list[Listen]:
-        params: dict[str, Any] = {'count': count}
-        if max_ts is not None:
-            params['max_ts'] = max_ts
+        # LB API caps at 100 per request; paginate transparently.
+        _API_MAX = 100
+        all_listens: list[Listen] = []
+        while len(all_listens) < count:
+            batch_size = min(count - len(all_listens), _API_MAX)
+            params: dict[str, Any] = {'count': batch_size}
+            if max_ts is not None:
+                params['max_ts'] = max_ts
 
-        resp = self._client.get(f'/1/user/{user}/listens', params=params)
-        self._handle_rate_limit(resp)
-        resp.raise_for_status()
+            resp = self._client.get(f'/1/user/{user}/listens', params=params)
+            self._handle_rate_limit(resp)
+            resp.raise_for_status()
 
-        listens_data = resp.json()['payload']['listens']
-        return [Listen.from_api(item) for item in listens_data]
+            listens_data = resp.json()['payload']['listens']
+            if not listens_data:
+                break
+
+            batch = [Listen.from_api(item) for item in listens_data]
+            all_listens.extend(batch)
+            max_ts = batch[-1].listened_at
+
+        return all_listens
 
     def submit_mapping(self, recording_msid: str, recording_mbid: str) -> None:
         resp = self._client.post(
