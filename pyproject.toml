@@ -4,13 +4,8 @@ version = "0.1.0"
 description = "Automatically map unlinked ListenBrainz listens to MusicBrainz recordings"
 requires-python = ">=3.12"
 dependencies = [
-    "click>=8.1",
     "httpx>=0.27",
-    "mcp>=1.26.0",
 ]
-
-[project.scripts]
-lb-mapper = "lb_mapper.cli:cli"
 
 [build-system]
 requires = ["hatchling"]

@@ -10,6 +10,7 @@ import httpx
 
 from lb_mapper.lb_client import create_http_client
 
+
 logger = logging.getLogger(__name__)
 
 LB_LABS_URL = 'https://labs.api.listenbrainz.org'
@@ -55,7 +56,11 @@ def search_recording(
         resp = _client.post('/recording-search/json', json=payload)
         resp.raise_for_status()
     except httpx.HTTPStatusError as e:
-        logger.debug('LB Labs search returned %s for query: %s', e.response.status_code, query[:80])
+        logger.debug(
+            'LB Labs search returned %s for query: %s',
+            e.response.status_code,
+            query[:80],
+        )
         return []
 
     results: list[LBRecordingMatch] = []

@@ -112,6 +112,17 @@ class ListenBrainzClient:
         self._handle_rate_limit(resp)
         resp.raise_for_status()
 
+    def delete_listen(self, listened_at: int, recording_msid: str) -> None:
+        resp = self._client.post(
+            '/1/delete-listen',
+            json={
+                'listened_at': listened_at,
+                'recording_msid': recording_msid,
+            },
+        )
+        self._handle_rate_limit(resp)
+        resp.raise_for_status()
+
     def _handle_rate_limit(self, resp: httpx.Response) -> None:
         remaining = resp.headers.get('X-RateLimit-Remaining')
         if remaining is None:
