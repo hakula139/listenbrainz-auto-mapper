@@ -11,6 +11,7 @@ import httpx
 
 BASE_URL = 'https://api.listenbrainz.org'
 _API_PAGE_LIMIT = 100
+_MAX_RETRIES = 3
 
 
 @dataclass(frozen=True)
@@ -68,64 +69,94 @@ class ListenBrainzClient:
     def fetch_listens(
         self, user: str, count: int = 50, max_ts: int | None = None
     ) -> list[Listen]:
-        """Fetch recent listens, paginating transparently."""
+        """Fetch recent listens, paginating transparently.
+
+        Deduplicates across page boundaries to handle listens that share
+        the same ``listened_at`` timestamp.
+        """
         all_listens: list[Listen] = []
+        seen: set[tuple[int, str]] = set()
         while len(all_listens) < count:
-            batch_size = min(count - len(all_listens), _API_PAGE_LIMIT)
-            params: dict[str, Any] = {'count': batch_size}
+            params: dict[str, Any] = {'count': _API_PAGE_LIMIT}
             if max_ts is not None:
                 params['max_ts'] = max_ts
 
-            resp = self._client.get(f'/1/user/{user}/listens', params=params)
-            self._handle_rate_limit(resp)
-            resp.raise_for_status()
-
+            resp = self._request('GET', f'/1/user/{user}/listens', params=params)
             listens_data = resp.json()['payload']['listens']
             if not listens_data:
                 break
 
-            batch = [Listen.from_api(item) for item in listens_data]
-            all_listens.extend(batch)
-            max_ts = batch[-1].listened_at
+            added = 0
+            for item in listens_data:
+                listen = Listen.from_api(item)
+                key = (listen.listened_at, listen.recording_msid)
+                if key not in seen:
+                    seen.add(key)
+                    all_listens.append(listen)
+                    added += 1
 
-        return all_listens
+            if added == 0:
+                break
+
+            # Include the boundary timestamp in the next query to avoid
+            # skipping listens that share the same second as the last item.
+            # Duplicates are filtered by the ``seen`` set above.
+            max_ts = all_listens[-1].listened_at + 1
+
+        return all_listens[:count]
 
     def submit_mapping(self, recording_msid: str, recording_mbid: str) -> None:
-        resp = self._client.post(
+        self._request(
+            'POST',
             '/1/metadata/submit_manual_mapping/',
             json={
                 'recording_msid': recording_msid,
                 'recording_mbid': recording_mbid,
             },
         )
-        self._handle_rate_limit(resp)
-        resp.raise_for_status()
 
     def delete_listen(self, listened_at: int, recording_msid: str) -> None:
-        resp = self._client.post(
+        self._request(
+            'POST',
             '/1/delete-listen',
             json={
                 'listened_at': listened_at,
                 'recording_msid': recording_msid,
             },
         )
-        self._handle_rate_limit(resp)
-        resp.raise_for_status()
 
-    def _handle_rate_limit(self, resp: httpx.Response) -> None:
+    def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        """Make an HTTP request with rate-limit awareness and 429 retry."""
+        retries_left = _MAX_RETRIES
+        while True:
+            resp = self._client.request(method, url, **kwargs)
+            retries_left -= 1
+            if resp.status_code != 429 or retries_left <= 0:
+                break
+            self._sleep_for_reset(resp)
+        resp.raise_for_status()
+        self._sleep_if_near_limit(resp)
+        return resp
+
+    def _sleep_for_reset(self, resp: httpx.Response) -> None:
+        """Sleep until the rate-limit window resets."""
+        try:
+            reset_in = float(resp.headers.get('X-RateLimit-Reset-In', '1'))
+        except ValueError:
+            reset_in = 1.0
+        time.sleep(max(reset_in, 0.1))
+
+    def _sleep_if_near_limit(self, resp: httpx.Response) -> None:
+        """Preemptively sleep when rate-limit headroom is low."""
         remaining = resp.headers.get('X-RateLimit-Remaining')
         if remaining is None:
             return
         try:
-            remaining_int = int(remaining)
+            if int(remaining) > 1:
+                return
         except ValueError:
             return
-        if remaining_int <= 1:
-            try:
-                reset_in = float(resp.headers.get('X-RateLimit-Reset-In', '1'))
-            except ValueError:
-                reset_in = 1.0
-            time.sleep(reset_in)
+        self._sleep_for_reset(resp)
 
     def close(self) -> None:
         self._client.close()

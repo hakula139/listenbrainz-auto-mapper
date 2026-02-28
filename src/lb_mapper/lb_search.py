@@ -15,12 +15,12 @@ logger = logging.getLogger(__name__)
 LB_LABS_URL = 'https://labs.api.listenbrainz.org'
 _MAX_QUERY_LEN = 200
 
-# CJK Unified Ideographs, Katakana, Hiragana, CJK symbols
-_CJK_RE = re.compile(r'[\u3000-\u9fff]')
+# CJK ideographs, kana, bopomofo, Hangul, compatibility forms, halfwidth katakana
+_CJK_RE = re.compile(r'[\u3000-\u9fff\uac00-\ud7af\uf900-\ufaff\uff65-\uff9f]')
 
 
 def contains_cjk(text: str) -> bool:
-    """Check whether *text* contains any CJK characters."""
+    """Check whether *text* contains any CJK / Hangul / Kana characters."""
     return bool(_CJK_RE.search(text))
 
 
@@ -50,7 +50,7 @@ def search_recording(
 ) -> list[LBRecordingMatch]:
     """Search LB Labs for recordings matching artist + track name.
 
-    Returns an empty list on any HTTP or transport error.
+    Returns an empty list on any HTTP, transport, or JSON parse error.
     """
     query = f'{artist} {recording}'.strip()
     if not query:
@@ -63,7 +63,8 @@ def search_recording(
     try:
         resp = _get_client().post('/recording-search/json', json=[{'query': query}])
         resp.raise_for_status()
-    except httpx.HTTPError as exc:
+        results = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
         logger.debug('LB Labs search failed for query %s: %s', query[:80], exc)
         return []
 
@@ -76,5 +77,5 @@ def search_recording(
             artist_credit_name=item.get('artist_credit_name', ''),
             artist_credit_id=item.get('artist_credit_id', 0),
         )
-        for item in resp.json()
+        for item in results
     ]
