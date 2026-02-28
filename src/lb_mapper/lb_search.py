@@ -7,6 +7,7 @@ import logging
 import re
 from dataclasses import dataclass
 from functools import cache
+from typing import Any
 
 import httpx
 
@@ -68,12 +69,9 @@ def search_recording(
     try:
         resp = _get_client().post('/recording-search/json', json=[{'query': query}])
         resp.raise_for_status()
-        results = resp.json()
+        results: list[dict[str, Any]] = resp.json()
     except (httpx.HTTPError, ValueError) as exc:
         logger.debug('LB Labs search failed for query %s: %s', query[:80], exc)
-        return []
-
-    if not isinstance(results, list):
         return []
 
     return [
