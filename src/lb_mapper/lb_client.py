@@ -1,4 +1,4 @@
-"""ListenBrainz API client: fetch listens and submit manual MBID mappings."""
+"""ListenBrainz API client: fetch listens, submit mappings, delete listens."""
 
 from __future__ import annotations
 
@@ -10,18 +10,7 @@ import httpx
 
 
 BASE_URL = 'https://api.listenbrainz.org'
-
-
-def create_http_client(**kwargs: Any) -> httpx.Client:
-    """Create an httpx client with retry transport and SSL verification disabled."""
-    transport = httpx.HTTPTransport(retries=3)
-    defaults: dict[str, Any] = {
-        'transport': transport,
-        'verify': False,
-        'timeout': 30.0,
-    }
-    defaults.update(kwargs)
-    return httpx.Client(**defaults)
+_API_PAGE_LIMIT = 100
 
 
 @dataclass(frozen=True)
@@ -58,10 +47,11 @@ class Listen:
 
 class ListenBrainzClient:
     def __init__(self, token: str) -> None:
-        self._token = token
-        self._client = create_http_client(
+        self._client = httpx.Client(
+            transport=httpx.HTTPTransport(retries=3),
             base_url=BASE_URL,
             headers={'Authorization': f'Token {token}'},
+            timeout=30.0,
         )
 
     def __enter__(self) -> ListenBrainzClient:
@@ -78,11 +68,10 @@ class ListenBrainzClient:
     def fetch_listens(
         self, user: str, count: int = 50, max_ts: int | None = None
     ) -> list[Listen]:
-        # LB API caps at 100 per request; paginate transparently.
-        _API_MAX = 100
+        """Fetch recent listens, paginating transparently."""
         all_listens: list[Listen] = []
         while len(all_listens) < count:
-            batch_size = min(count - len(all_listens), _API_MAX)
+            batch_size = min(count - len(all_listens), _API_PAGE_LIMIT)
             params: dict[str, Any] = {'count': batch_size}
             if max_ts is not None:
                 params['max_ts'] = max_ts

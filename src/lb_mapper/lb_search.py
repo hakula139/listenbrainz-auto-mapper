@@ -3,22 +3,25 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
-from typing import Any
+from functools import cache
 
 import httpx
-
-from lb_mapper.lb_client import create_http_client
 
 
 logger = logging.getLogger(__name__)
 
 LB_LABS_URL = 'https://labs.api.listenbrainz.org'
+_MAX_QUERY_LEN = 200
 
-_client = create_http_client(
-    base_url=LB_LABS_URL,
-    headers={'Accept': 'application/json'},
-)
+# CJK Unified Ideographs, Katakana, Hiragana, CJK symbols
+_CJK_RE = re.compile(r'[\u3000-\u9fff]')
+
+
+def contains_cjk(text: str) -> bool:
+    """Check whether *text* contains any CJK characters."""
+    return bool(_CJK_RE.search(text))
 
 
 @dataclass(frozen=True)
@@ -31,7 +34,14 @@ class LBRecordingMatch:
     artist_credit_id: int
 
 
-_MAX_QUERY_LEN = 200
+@cache
+def _get_client() -> httpx.Client:
+    return httpx.Client(
+        transport=httpx.HTTPTransport(retries=3),
+        base_url=LB_LABS_URL,
+        headers={'Accept': 'application/json'},
+        timeout=30.0,
+    )
 
 
 def search_recording(
@@ -40,44 +50,31 @@ def search_recording(
 ) -> list[LBRecordingMatch]:
     """Search LB Labs for recordings matching artist + track name.
 
-    The Typesense backend handles fuzzy matching, typo tolerance, and long
-    classical titles far better than MusicBrainz Lucene phrase queries.
+    Returns an empty list on any HTTP or transport error.
     """
     query = f'{artist} {recording}'.strip()
     if not query:
         return []
 
-    # Typesense returns 500 on very long queries; truncate to stay safe
+    # Typesense returns 500 on very long queries
     if len(query) > _MAX_QUERY_LEN:
         query = query[:_MAX_QUERY_LEN].rsplit(' ', 1)[0]
 
-    payload: list[dict[str, Any]] = [{'query': query}]
     try:
-        resp = _client.post('/recording-search/json', json=payload)
+        resp = _get_client().post('/recording-search/json', json=[{'query': query}])
         resp.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        logger.debug(
-            'LB Labs search returned %s for query: %s',
-            e.response.status_code,
-            query[:80],
-        )
+    except httpx.HTTPError as exc:
+        logger.debug('LB Labs search failed for query %s: %s', query[:80], exc)
         return []
 
-    results: list[LBRecordingMatch] = []
-    for item in resp.json():
-        results.append(
-            LBRecordingMatch(
-                recording_mbid=item.get('recording_mbid', ''),
-                recording_name=item.get('recording_name', ''),
-                release_name=item.get('release_name', ''),
-                release_mbid=item.get('release_mbid', ''),
-                artist_credit_name=item.get('artist_credit_name', ''),
-                artist_credit_id=item.get('artist_credit_id', 0),
-            )
+    return [
+        LBRecordingMatch(
+            recording_mbid=item.get('recording_mbid', ''),
+            recording_name=item.get('recording_name', ''),
+            release_name=item.get('release_name', ''),
+            release_mbid=item.get('release_mbid', ''),
+            artist_credit_name=item.get('artist_credit_name', ''),
+            artist_credit_id=item.get('artist_credit_id', 0),
         )
-    return results
-
-
-def close_client() -> None:
-    """Close the module-level HTTP client."""
-    _client.close()
+        for item in resp.json()
+    ]
