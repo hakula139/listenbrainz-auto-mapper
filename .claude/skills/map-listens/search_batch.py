@@ -1,11 +1,11 @@
 """Batch search LB Labs for recording matches.
 
-Reads a JSON array of {artist, track, release} objects from stdin.
-For each, searches LB Labs (Typesense) and returns structured results.
+Reads a JSON array of {artist, track, release, original_artist} objects
+from stdin.  For each, searches LB Labs (Typesense) and returns structured
+results.
 
-If the artist field appears to be a translated name and the original
-contains CJK characters, the script searches with the translated name
-first, then retries with the original if no results are found.
+If ``original_artist`` contains CJK characters and the translated-name
+search returns no results, the script retries with the original name.
 
 Usage:
     echo '[...]' | uv run python .claude/skills/map-listens/search_batch.py
@@ -14,24 +14,10 @@ Usage:
 from __future__ import annotations
 
 import json
-import re
 import sys
 from typing import Any
 
-
-sys.path.insert(0, 'src')
-
-from lb_mapper.lb_search import (  # noqa: E402
-    LBRecordingMatch,
-    search_recording,
-)
-
-
-_CJK_PATTERN = re.compile(r'[\u3000-\u9fff]')
-
-
-def _contains_cjk(text: str) -> bool:
-    return bool(_CJK_PATTERN.search(text))
+from lb_mapper.lb_search import LBRecordingMatch, contains_cjk, search_recording
 
 
 def _match_to_dict(m: LBRecordingMatch) -> dict[str, Any]:
@@ -51,9 +37,8 @@ def search_one(item: dict[str, str]) -> dict[str, Any]:
 
     results = search_recording(artist=artist, recording=track)
 
-    # If the provided artist is a translation (original is CJK), and we got
-    # no results, retry with the original CJK name.
-    if not results and original_artist and _contains_cjk(original_artist):
+    # Retry with the original CJK name if translation yielded nothing.
+    if not results and original_artist and contains_cjk(original_artist):
         results = search_recording(artist=original_artist, recording=track)
 
     return {
@@ -63,15 +48,15 @@ def search_one(item: dict[str, str]) -> dict[str, Any]:
 
 
 def main() -> None:
-    raw = sys.stdin.read()
-    items: list[dict[str, str]] = json.loads(raw)
+    items: list[dict[str, str]] = json.loads(sys.stdin.read())
 
     output: list[dict[str, Any]] = []
     for i, item in enumerate(items, 1):
         entry = search_one(item)
         output.append(entry)
         print(
-            f'[{i}/{len(items)}] {item.get("artist", "")} — {item.get("track", "")} '
+            f'[{i}/{len(items)}] '
+            f'{item.get("artist", "")} — {item.get("track", "")} '
             f'-> {len(entry["results"])} results',
             file=sys.stderr,
             flush=True,

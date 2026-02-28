@@ -4,7 +4,7 @@ Usage:
     uv run python .claude/skills/map-listens/fetch_listens.py [count]
 
 Outputs JSON to stdout:
-    {"total": N, "linked": N, "unlinked": [{listened_at, recording_msid, artist, track, release}, ...]}
+    {"total": N, "linked": N, "unlinked": [...]}
 """
 
 from __future__ import annotations
@@ -13,26 +13,12 @@ import json
 import os
 import sys
 
-sys.path.insert(0, 'src')
-
-from lb_mapper.lb_client import ListenBrainzClient  # noqa: E402
-
-
-def _load_env() -> None:
-    """Load .env file into os.environ (no external dependency)."""
-    env_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', '.env')
-    if not os.path.exists(env_path):
-        return
-    with open(env_path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith('#') and '=' in line:
-                k, _, v = line.partition('=')
-                os.environ.setdefault(k.strip(), v.strip())
+from lb_mapper import load_env
+from lb_mapper.lb_client import ListenBrainzClient
 
 
 def main() -> None:
-    _load_env()
+    load_env()
 
     token = os.environ.get('LB_TOKEN', '')
     if not token:
@@ -43,17 +29,17 @@ def main() -> None:
 
     with ListenBrainzClient(token) as lb:
         listens = lb.fetch_listens('Hakula', count=count)
-        unlinked = [l for l in listens if not l.is_linked]
+        unlinked = [x for x in listens if not x.is_linked]
 
         out = [
             {
-                'listened_at': l.listened_at,
-                'recording_msid': l.recording_msid,
-                'artist': l.artist_name,
-                'track': l.track_name,
-                'release': l.release_name,
+                'listened_at': x.listened_at,
+                'recording_msid': x.recording_msid,
+                'artist': x.artist_name,
+                'track': x.track_name,
+                'release': x.release_name,
             }
-            for l in unlinked
+            for x in unlinked
         ]
 
         json.dump(

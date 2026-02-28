@@ -168,6 +168,6 @@ When evaluating a large batch (50+ items), use Codex MCP to parallelize evaluati
 ## Important Notes
 
 - NEVER submit a mapping or delete a listen without explicit user approval.
-- The LB Labs search API (`/recording-search/json`) is the primary search tool — it uses Typesense with fuzzy matching and handles classical titles well. The MusicBrainz API (`/ws/2/recording`) is available as a fallback but has stricter rate limits (1 req/sec).
+- The LB Labs search API (`/recording-search/json`) is the primary search tool — it uses Typesense with fuzzy matching and handles classical titles well.
 - The `review.jsonl` file at the repo root stores previously flagged items. Check it to avoid re-evaluating items the user has already seen.
 - Rate limits: LB API returns `X-RateLimit-Remaining` headers; the client sleeps automatically when near the limit. LB Labs has no explicit rate limit but be reasonable.

@@ -17,25 +17,12 @@ import json
 import os
 import sys
 
-sys.path.insert(0, 'src')
-
-from lb_mapper.lb_client import ListenBrainzClient  # noqa: E402
-
-
-def _load_env() -> None:
-    env_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', '.env')
-    if not os.path.exists(env_path):
-        return
-    with open(env_path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith('#') and '=' in line:
-                k, _, v = line.partition('=')
-                os.environ.setdefault(k.strip(), v.strip())
+from lb_mapper import load_env
+from lb_mapper.lb_client import ListenBrainzClient
 
 
 def main() -> None:
-    _load_env()
+    load_env()
 
     token = os.environ.get('LB_TOKEN', '')
     if not token:
@@ -50,22 +37,36 @@ def main() -> None:
         if mappings:
             print(f'Submitting {len(mappings)} mappings...', flush=True)
             for i, m in enumerate(mappings, 1):
+                msid = m['recording_msid'][:12]
                 try:
                     lb.submit_mapping(m['recording_msid'], m['recording_mbid'])
-                    print(f'  [{i}/{len(mappings)}] MAPPED {m["recording_msid"][:12]}...', flush=True)
-                except Exception as e:
-                    print(f'  [{i}/{len(mappings)}] ERROR {m["recording_msid"][:12]}...: {e}', flush=True)
+                    print(f'  [{i}/{len(mappings)}] MAPPED {msid}...', flush=True)
+                except Exception as exc:
+                    print(
+                        f'  [{i}/{len(mappings)}] ERROR {msid}...: {exc}',
+                        flush=True,
+                    )
 
         if deletions:
             print(f'Deleting {len(deletions)} listens...', flush=True)
             for i, d in enumerate(deletions, 1):
+                msid = d['recording_msid'][:12]
                 try:
                     lb.delete_listen(d['listened_at'], d['recording_msid'])
-                    print(f'  [{i}/{len(deletions)}] DELETED {d["recording_msid"][:12]}...', flush=True)
-                except Exception as e:
-                    print(f'  [{i}/{len(deletions)}] ERROR {d["recording_msid"][:12]}...: {e}', flush=True)
+                    print(
+                        f'  [{i}/{len(deletions)}] DELETED {msid}...',
+                        flush=True,
+                    )
+                except Exception as exc:
+                    print(
+                        f'  [{i}/{len(deletions)}] ERROR {msid}...: {exc}',
+                        flush=True,
+                    )
 
-    print(f'Done: {len(mappings)} mapped, {len(deletions)} deleted.', flush=True)
+    print(
+        f'Done: {len(mappings)} mapped, {len(deletions)} deleted.',
+        flush=True,
+    )
 
 
 if __name__ == '__main__':
