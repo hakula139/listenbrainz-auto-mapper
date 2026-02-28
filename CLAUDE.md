@@ -7,17 +7,17 @@ lb-mapper automatically maps unlinked ListenBrainz listens to MusicBrainz record
 ### Project Layout
 
 ```text
-src/lb_mapper/                    Python package
-  __init__.py                     Package docstring
-  lb_client.py                    ListenBrainz API client (fetch, map, delete)
-  lb_search.py                    LB Labs Typesense search + CJK detection
-  cli/                            CLI helpers invoked by the skill
-    fetch_listens.py              Fetch unlinked listens → JSON
-    search_batch.py               Batch search LB Labs → JSON
-    execute.py                    Submit mappings + delete listens
-
-.claude/skills/map-listens/       Claude Code skill
-  SKILL.md                        Skill definition (orchestration + domain rules)
+.
+├── src/lb_mapper/                     # Python package
+│   ├── __init__.py                    # Package docstring
+│   ├── lb_client.py                   # ListenBrainz API client (fetch, map, delete)
+│   ├── lb_search.py                   # LB Labs Typesense search + CJK detection
+│   └── cli/                           # CLI helpers invoked by the skill
+│       ├── fetch_listens.py           # Fetch unlinked listens → JSON
+│       ├── search_batch.py            # Batch search LB Labs → JSON
+│       └── execute.py                 # Submit mappings + delete listens
+└── .claude/skills/map-listens/        # Claude Code skill
+    └── SKILL.md                       # Skill definition (orchestration + domain rules)
 ```
 
 ### Key APIs
