@@ -104,8 +104,8 @@ Example acceptance:
 #### CJK / Katakana Handling
 
 <!-- cspell:disable -->
-- Katakana-only artist names (no kanji, no Latin) with zero usable search results across all search strategies should be flagged for **deletion** — they are likely bad scrobbles from Japanese streaming services that will never match.
-- Mixed scripts (katakana + Latin, e.g., "キャロル&チューズデイ(Vo.Nai Br.XX&Celeina Ann)") should NOT be auto-deleted; these often have legitimate MB entries.
+- Katakana artist names with zero usable search results across all search strategies should be flagged for **deletion** — they are likely bad scrobbles from Japanese streaming services that will never match. "Katakana artist" means the name is composed of katakana (transliterating a Western name), even if it includes standard Japanese ensemble / instrument suffixes in kanji such as 四重奏団 (quartet), 管弦楽団 (orchestra), 室内管弦楽団 (chamber orchestra), 交響楽団 (symphony orchestra), or 合唱団 (choir). These suffixes do not make the artist "mixed-script" — the core name is still a transliteration.
+- Mixed scripts (katakana + Latin, e.g., "キャロル&チューズデイ(Vo.Nai Br.XX&Celeina Ann)") should NOT be auto-deleted; these often have legitimate MB entries. Likewise, artists with genuine kanji names (e.g., 辻井伸行, 角野隼斗) are native Japanese artists and should NOT be auto-deleted.
 <!-- cspell:enable -->
 
 #### Verdict Categories
