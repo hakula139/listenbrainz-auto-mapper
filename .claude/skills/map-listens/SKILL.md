@@ -32,13 +32,17 @@ uv run python -m lb_mapper.cli.fetch_listens COUNT
 
 Replace `COUNT` with the number of **unlinked** listens to find (default 100). The script paginates through history until enough unlinked listens are collected. It outputs JSON to stdout with `total` (scanned), `linked`, and `unlinked` fields. Report the totals to the user.
 
-### Phase 2: Translate CJK Artists
+### Phase 2: Translate CJK Artists and Titles
 
-Load the translation cache from `~/.cache/lb-mapper/translations.json`. For any unlinked listen whose artist name contains CJK / Hangul / Kana characters (detected by `contains_cjk()` in `lb_mapper.lb_search`):
+Load the translation cache from `~/.cache/lb-mapper/translations.json`. The cache stores translations for both artist names and track titles (keyed by the original string).
+
+**Artists**: For any unlinked listen whose artist name contains CJK / Hangul / Kana characters (detected by `contains_cjk()` in `lb_mapper.lb_search`):
 
 1. Look up the artist in the cache. If found, use the cached translation.
 2. If NOT found in cache, translate the artist name to its English equivalent (it may be a katakana transliteration of a Western name, or a native CJK name). If Codex MCP is available, delegate the translation to it; otherwise, translate directly.
 3. Update the cache file after translating new names.
+
+**Titles**: For any unlinked listen whose track title contains CJK characters, translate the title to its English equivalent following the same cache-lookup-then-translate pattern. Japanese streaming services often localize Western classical titles (e.g., "ピアノ協奏曲 第3番 ニ短調 作品30" → "Piano Concerto No. 3 in D minor, Op. 30"). Mixed titles (CJK + Latin, e.g., "ピアノ協奏曲 第3番 ニ短調 作品30: 第3楽章 Finale. Alla breve") should have only the CJK portions translated while preserving the Latin segments.
 
 ### Phase 3: Search
 
@@ -48,9 +52,9 @@ Use the helper script to batch-search. Pipe a JSON array of objects to stdin:
 echo '$JSON_ARRAY' | uv run python -m lb_mapper.cli.search_batch
 ```
 
-Each object has fields: `artist` (translated name if CJK, otherwise original), `track`, `release`, and `original_artist` (the raw artist name from the listen — set to empty string if no CJK translation was needed).
+Each object has fields: `artist` (translated name if CJK, otherwise original), `track` (translated title if CJK, otherwise original), `release`, and `original_artist` (the raw artist name from the listen — set to empty string if no CJK translation was needed).
 
-The script searches LB Labs (Typesense) with the `artist` field first. If `original_artist` contains CJK and the first search returns no results, it retries with the original CJK name.
+The script searches LB Labs (Typesense) with the `artist` field first. If `original_artist` contains CJK and the first search returns no results, it retries with the original CJK name. If the track title was translated from CJK and the initial search returns no usable results, retry with the translated title to improve matching for localized metadata.
 
 The script returns a JSON array where each element contains the original input plus a `results` array of matches (each with `recording_mbid`, `recording_name`, `release_name`, `release_mbid`, `artist_credit_name`, `artist_credit_id`).
 
@@ -105,6 +109,7 @@ Example acceptance:
 
 <!-- cspell:disable -->
 - Katakana artist names with zero usable search results across all search strategies should be flagged for **deletion** — they are likely bad scrobbles from Japanese streaming services that will never match. "Katakana artist" means the name is composed of katakana (transliterating a Western name), even if it includes standard Japanese ensemble / instrument suffixes in kanji such as 四重奏団 (quartet), 管弦楽団 (orchestra), 室内管弦楽団 (chamber orchestra), 交響楽団 (symphony orchestra), or 合唱団 (choir). These suffixes do not make the artist "mixed-script" — the core name is still a transliteration.
+- Listens with CJK-translated track titles (e.g., "ピアノ協奏曲 第3番 ニ短調 作品30") that still have no usable match after title translation and re-search should also be flagged for **deletion**. These are localized metadata from Japanese streaming services — if the translated English title also fails to match, the specific recording is unlikely to exist in MB.
 - Mixed scripts (katakana + Latin, e.g., "キャロル&チューズデイ(Vo.Nai Br.XX&Celeina Ann)") should NOT be auto-deleted; these often have legitimate MB entries. Likewise, artists with genuine kanji names (e.g., 辻井伸行, 角野隼斗) are native Japanese artists and should NOT be auto-deleted.
 <!-- cspell:enable -->
 
@@ -115,7 +120,7 @@ Classify each listen into one of:
 1. **link** — Confident match. Same work, compatible artist, title clearly identifies the same recording.
 2. **review** — Uncertain. Plausible but ambiguous (short title, only partial title overlap, arrangement differences, artist credit includes the expected name but is a larger ensemble).
 3. **skip** — No usable match found. Leave for future processing.
-4. **delete** — Bad listen that will never match (katakana-only artist with no results, garbled metadata).
+4. **delete** — Bad listen that will never match (katakana artist with no results, CJK-translated title with no results after translation, garbled metadata).
 
 ### Phase 5: Present Results for Approval
 
