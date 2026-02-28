@@ -48,7 +48,7 @@ src/lb_mapper/                    Python package
 
 ### Module Boundaries
 
-- `lb_client.py` owns all authenticated ListenBrainz operations.
+- `lb_client.py` owns all authenticated ListenBrainz operations. `iter_listens()` is the core generator; `fetch_listens()` is a convenience wrapper.
 - `lb_search.py` owns LB Labs search and CJK text detection.
 - Each module creates its own `httpx.Client` — no shared factory.
 - `lb_search.py` uses lazy initialization (`@cache`) since it is a module-level singleton.

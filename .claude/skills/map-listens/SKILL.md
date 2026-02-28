@@ -30,7 +30,7 @@ The CJK translation cache is at `~/.cache/lb-mapper/translations.json` (JSON obj
 uv run python -m lb_mapper.cli.fetch_listens COUNT
 ```
 
-Replace `COUNT` with the requested count (default 1000). The script outputs JSON to stdout with `total`, `linked`, and `unlinked` fields. Report the totals to the user.
+Replace `COUNT` with the number of **unlinked** listens to find (default 1000). The script paginates through history until enough unlinked listens are collected. It outputs JSON to stdout with `total` (scanned), `linked`, and `unlinked` fields. Report the totals to the user.
 
 ### Phase 2: Translate CJK Artists
 

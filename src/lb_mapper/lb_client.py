@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -66,17 +67,14 @@ class ListenBrainzClient:
     ) -> None:
         self.close()
 
-    def fetch_listens(
-        self, user: str, count: int = 50, max_ts: int | None = None
-    ) -> list[Listen]:
-        """Fetch recent listens, paginating transparently.
+    def iter_listens(self, user: str, max_ts: int | None = None) -> Iterator[Listen]:
+        """Yield listens in reverse chronological order.
 
-        Deduplicates across page boundaries to handle listens that share
-        the same ``listened_at`` timestamp.
+        Paginates through the API transparently, deduplicating across page
+        boundaries where listens share the same ``listened_at`` timestamp.
         """
-        all_listens: list[Listen] = []
         seen: set[tuple[int, str]] = set()
-        while len(all_listens) < count:
+        while True:
             params: dict[str, Any] = {'count': _API_PAGE_LIMIT}
             if max_ts is not None:
                 params['max_ts'] = max_ts
@@ -84,26 +82,34 @@ class ListenBrainzClient:
             resp = self._request('GET', f'/1/user/{user}/listens', params=params)
             listens_data = resp.json()['payload']['listens']
             if not listens_data:
-                break
+                return
 
-            added = 0
+            added = False
             for item in listens_data:
                 listen = Listen.from_api(item)
                 key = (listen.listened_at, listen.recording_msid)
                 if key not in seen:
                     seen.add(key)
-                    all_listens.append(listen)
-                    added += 1
+                    yield listen
+                    added = True
 
-            if added == 0:
+            if not added:
+                return
+
+            # Include the boundary timestamp so we don't skip listens
+            # sharing the same second. The ``seen`` set filters duplicates.
+            max_ts = listens_data[-1]['listened_at'] + 1
+
+    def fetch_listens(
+        self, user: str, count: int = 50, max_ts: int | None = None
+    ) -> list[Listen]:
+        """Fetch *count* recent listens."""
+        result: list[Listen] = []
+        for listen in self.iter_listens(user, max_ts):
+            result.append(listen)
+            if len(result) >= count:
                 break
-
-            # Include the boundary timestamp in the next query to avoid
-            # skipping listens that share the same second as the last item.
-            # Duplicates are filtered by the ``seen`` set above.
-            max_ts = all_listens[-1].listened_at + 1
-
-        return all_listens[:count]
+        return result
 
     def submit_mapping(self, recording_msid: str, recording_mbid: str) -> None:
         self._request(

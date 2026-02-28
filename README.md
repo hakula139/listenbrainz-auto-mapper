@@ -43,8 +43,8 @@ cp .env.example .env
 Inside Claude Code, from the repo root:
 
 ```text
-/map-listens        # process the last 1000 listens
-/map-listens 500    # process the last 500 listens
+/map-listens        # find and process 1000 unlinked listens
+/map-listens 500    # find and process 500 unlinked listens
 ```
 
 ## Development

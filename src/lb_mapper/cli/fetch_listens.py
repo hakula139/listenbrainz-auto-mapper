@@ -1,5 +1,8 @@
 """Fetch recent listens and output unlinked ones as JSON.
 
+Paginates until *count* unlinked listens are found (or history is
+exhausted).
+
 Usage:
     uv run python -m lb_mapper.cli.fetch_listens [count]
 
@@ -12,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -33,34 +37,40 @@ def main() -> None:
 
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 1000
 
+    unlinked: list[dict[str, Any]] = []
+    total = 0
+    linked = 0
+
     with ListenBrainzClient(token) as lb:
-        listens = lb.fetch_listens(user, count=count)
-        unlinked = [x for x in listens if not x.is_linked]
+        for listen in lb.iter_listens(user):
+            total += 1
+            if listen.is_linked:
+                linked += 1
+            else:
+                unlinked.append(
+                    {
+                        'listened_at': listen.listened_at,
+                        'recording_msid': listen.recording_msid,
+                        'artist': listen.artist_name,
+                        'track': listen.track_name,
+                        'release': listen.release_name,
+                    }
+                )
+                if len(unlinked) >= count:
+                    break
 
-        out = [
-            {
-                'listened_at': x.listened_at,
-                'recording_msid': x.recording_msid,
-                'artist': x.artist_name,
-                'track': x.track_name,
-                'release': x.release_name,
-            }
-            for x in unlinked
-        ]
-
-        json.dump(
-            {
-                'total': len(listens),
-                'linked': len(listens) - len(unlinked),
-                'unlinked': out,
-            },
-            sys.stdout,
-            ensure_ascii=False,
-        )
+    json.dump(
+        {
+            'total': total,
+            'linked': linked,
+            'unlinked': unlinked,
+        },
+        sys.stdout,
+        ensure_ascii=False,
+    )
 
     print(
-        f'Fetched {len(listens)}, {len(listens) - len(unlinked)} linked, '
-        f'{len(unlinked)} unlinked',
+        f'Scanned {total}, {linked} linked, {len(unlinked)} unlinked',
         file=sys.stderr,
         flush=True,
     )
