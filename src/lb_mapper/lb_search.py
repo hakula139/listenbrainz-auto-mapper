@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import logging
 import re
 from dataclasses import dataclass
@@ -9,6 +10,8 @@ from functools import cache
 
 import httpx
 
+
+__all__ = ['LBRecordingMatch', 'contains_cjk', 'search_recording']
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +39,14 @@ class LBRecordingMatch:
 
 @cache
 def _get_client() -> httpx.Client:
-    return httpx.Client(
+    client = httpx.Client(
         transport=httpx.HTTPTransport(retries=3),
         base_url=LB_LABS_URL,
         headers={'Accept': 'application/json'},
         timeout=30.0,
     )
+    atexit.register(client.close)
+    return client
 
 
 def search_recording(
@@ -66,6 +71,9 @@ def search_recording(
         results = resp.json()
     except (httpx.HTTPError, ValueError) as exc:
         logger.debug('LB Labs search failed for query %s: %s', query[:80], exc)
+        return []
+
+    if not isinstance(results, list):
         return []
 
     return [
