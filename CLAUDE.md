@@ -8,15 +8,16 @@ lb-mapper automatically maps unlinked ListenBrainz listens to MusicBrainz record
 
 ```text
 src/lb_mapper/                    Python package
-  __init__.py                     load_env() utility
+  __init__.py                     Package docstring
   lb_client.py                    ListenBrainz API client (fetch, map, delete)
   lb_search.py                    LB Labs Typesense search + CJK detection
+  cli/                            CLI helpers invoked by the skill
+    fetch_listens.py              Fetch unlinked listens → JSON
+    search_batch.py               Batch search LB Labs → JSON
+    execute.py                    Submit mappings + delete listens
 
 .claude/skills/map-listens/       Claude Code skill
   SKILL.md                        Skill definition (orchestration + domain rules)
-  fetch_listens.py                Fetch unlinked listens → JSON
-  search_batch.py                 Batch search LB Labs → JSON
-  execute.py                      Submit mappings + delete listens
 ```
 
 ### Key APIs
@@ -35,7 +36,7 @@ src/lb_mapper/                    Python package
 
 ### Dependencies
 
-- Only `httpx` at runtime. Keep it minimal.
+- Runtime: `httpx`, `python-dotenv`. Keep it minimal.
 - Dev tools (`ruff`, `mypy`, `pre-commit`) are in `[dependency-groups] dev`.
 
 ### Error Handling
@@ -52,12 +53,12 @@ src/lb_mapper/                    Python package
 - Each module creates its own `httpx.Client` — no shared factory.
 - `lb_search.py` uses lazy initialization (`@cache`) since it is a module-level singleton.
 
-### Skill Helper Scripts
+### CLI Helpers
 
-Scripts in `.claude/skills/map-listens/` are invoked by Claude Code via `uv run`. They:
+The `lb_mapper.cli` subpackage contains scripts invoked by the skill via `uv run python -m lb_mapper.cli.<script>`. They:
 
 - Import from the `lb_mapper` package (installed by `uv sync`)
-- Use `lb_mapper.load_env()` to load `.env` (no `sys.path` hacks)
+- Use `python-dotenv` (`load_dotenv()`) to load `.env`
 - Communicate via JSON on stdin / stdout; progress on stderr
 
 ## Git Conventions
@@ -77,7 +78,7 @@ uv run pre-commit run --all-files
 Individual tools:
 
 ```bash
-uv run ruff check src/ .claude/skills/
-uv run ruff format --check src/ .claude/skills/
+uv run ruff check src/
+uv run ruff format --check src/
 uv run mypy src/lb_mapper/ --strict
 ```

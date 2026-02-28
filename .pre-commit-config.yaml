@@ -16,24 +16,22 @@ repos:
         files: ^src/lb_mapper/.*\.pyi?$
         additional_dependencies:
           - httpx
+          - python-dotenv
 
   # Python linting and formatting with ruff
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.2
     hooks:
       - id: ruff-check
-        files: ^(src/lb_mapper|\.claude/skills/map-listens)/.*\.pyi?$
         args:
           - --fix
           - --unsafe-fixes
       - id: ruff-format
-        files: ^(src/lb_mapper|\.claude/skills/map-listens)/.*\.pyi?$
 
   # Python security linting with bandit
   - repo: https://github.com/pycqa/bandit
     rev: 1.9.3
     hooks:
       - id: bandit
-        files: ^(src/lb_mapper|\.claude/skills/map-listens)/.*\.pyi?$
         additional_dependencies:
           - bandit[toml]

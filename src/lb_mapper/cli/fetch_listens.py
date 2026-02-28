@@ -1,7 +1,7 @@
 """Fetch recent listens and output unlinked ones as JSON.
 
 Usage:
-    uv run python .claude/skills/map-listens/fetch_listens.py [count]
+    uv run python -m lb_mapper.cli.fetch_listens [count]
 
 Outputs JSON to stdout:
     {"total": N, "linked": N, "unlinked": [...]}
@@ -13,22 +13,28 @@ import json
 import os
 import sys
 
-from lb_mapper import load_env
+from dotenv import load_dotenv
+
 from lb_mapper.lb_client import ListenBrainzClient
 
 
 def main() -> None:
-    load_env()
+    load_dotenv()
 
     token = os.environ.get('LB_TOKEN', '')
     if not token:
         print('LB_TOKEN not set', file=sys.stderr)
         sys.exit(1)
 
+    user = os.environ.get('LB_USER', '')
+    if not user:
+        print('LB_USER not set', file=sys.stderr)
+        sys.exit(1)
+
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 1000
 
     with ListenBrainzClient(token) as lb:
-        listens = lb.fetch_listens('Hakula', count=count)
+        listens = lb.fetch_listens(user, count=count)
         unlinked = [x for x in listens if not x.is_linked]
 
         out = [

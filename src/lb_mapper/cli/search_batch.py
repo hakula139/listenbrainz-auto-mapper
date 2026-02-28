@@ -8,29 +8,20 @@ If ``original_artist`` contains CJK characters and the translated-name
 search returns no results, the script retries with the original name.
 
 Usage:
-    echo '[...]' | uv run python .claude/skills/map-listens/search_batch.py
+    echo '[...]' | uv run python -m lb_mapper.cli.search_batch
 """
 
 from __future__ import annotations
 
 import json
 import sys
+from dataclasses import asdict
 from typing import Any
 
-from lb_mapper.lb_search import LBRecordingMatch, contains_cjk, search_recording
+from lb_mapper.lb_search import contains_cjk, search_recording
 
 
-def _match_to_dict(m: LBRecordingMatch) -> dict[str, Any]:
-    return {
-        'recording_mbid': m.recording_mbid,
-        'recording_name': m.recording_name,
-        'release_name': m.release_name,
-        'release_mbid': m.release_mbid,
-        'artist_credit_name': m.artist_credit_name,
-    }
-
-
-def search_one(item: dict[str, str]) -> dict[str, Any]:
+def _search_one(item: dict[str, str]) -> dict[str, Any]:
     artist = item.get('artist', '')
     track = item.get('track', '')
     original_artist = item.get('original_artist', '')
@@ -43,7 +34,7 @@ def search_one(item: dict[str, str]) -> dict[str, Any]:
 
     return {
         **item,
-        'results': [_match_to_dict(m) for m in results],
+        'results': [asdict(m) for m in results],
     }
 
 
@@ -52,7 +43,7 @@ def main() -> None:
 
     output: list[dict[str, Any]] = []
     for i, item in enumerate(items, 1):
-        entry = search_one(item)
+        entry = _search_one(item)
         output.append(entry)
         print(
             f'[{i}/{len(items)}] '

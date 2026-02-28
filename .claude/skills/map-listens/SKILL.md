@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Map Listens
 
-Map unlinked ListenBrainz listens to MusicBrainz recordings for user "Hakula".
+Map unlinked ListenBrainz listens to MusicBrainz recordings for the user specified by `LB_USER` in `.env`.
 
 ## Invocation
 
@@ -14,11 +14,11 @@ Map unlinked ListenBrainz listens to MusicBrainz recordings for user "Hakula".
 
 ## Setup
 
-The project lives at the repo root. The `.env` file contains `LB_TOKEN`. Python code runs via `uv run` from the repo root. Helper scripts are in `.claude/skills/map-listens/`:
+The project lives at the repo root. The `.env` file contains `LB_TOKEN` and `LB_USER`. Python code runs via `uv run` from the repo root. CLI helpers are in the `lb_mapper.cli` package:
 
-- `fetch_listens.py` — fetch recent listens, output unlinked as JSON
-- `search_batch.py` — batch search LB Labs for recording matches
-- `execute.py` — submit approved mappings and delete approved listens
+- `lb_mapper.cli.fetch_listens` — fetch recent listens, output unlinked as JSON
+- `lb_mapper.cli.search_batch` — batch search LB Labs for recording matches
+- `lb_mapper.cli.execute` — submit approved mappings and delete approved listens
 
 The CJK translation cache is at `~/.cache/lb-mapper/translations.json` (JSON object mapping original artist names to English translations).
 
@@ -27,14 +27,14 @@ The CJK translation cache is at `~/.cache/lb-mapper/translations.json` (JSON obj
 ### Phase 1: Fetch and Filter
 
 ```bash
-uv run python .claude/skills/map-listens/fetch_listens.py COUNT
+uv run python -m lb_mapper.cli.fetch_listens COUNT
 ```
 
 Replace `COUNT` with the requested count (default 1000). The script outputs JSON to stdout with `total`, `linked`, and `unlinked` fields. Report the totals to the user.
 
 ### Phase 2: Translate CJK Artists
 
-Load the translation cache from `~/.cache/lb-mapper/translations.json`. For any unlinked listen whose artist name contains CJK characters (Unicode ranges U+3000-U+9FFF):
+Load the translation cache from `~/.cache/lb-mapper/translations.json`. For any unlinked listen whose artist name contains CJK / Hangul / Kana characters (detected by `contains_cjk()` in `lb_mapper.lb_search`):
 
 1. Look up the artist in the cache. If found, use the cached translation.
 2. If NOT found in cache, use Codex MCP to translate: ask it to return ONLY the English equivalent of the artist name (it may be a katakana transliteration of a Western name, or a native CJK name).
@@ -45,14 +45,14 @@ Load the translation cache from `~/.cache/lb-mapper/translations.json`. For any 
 Use the helper script to batch-search. Pipe a JSON array of objects to stdin:
 
 ```bash
-echo '$JSON_ARRAY' | uv run python .claude/skills/map-listens/search_batch.py
+echo '$JSON_ARRAY' | uv run python -m lb_mapper.cli.search_batch
 ```
 
 Each object has fields: `artist` (translated name if CJK, otherwise original), `track`, `release`, and `original_artist` (the raw artist name from the listen — set to empty string if no CJK translation was needed).
 
 The script searches LB Labs (Typesense) with the `artist` field first. If `original_artist` contains CJK and the first search returns no results, it retries with the original CJK name.
 
-The script returns a JSON array where each element contains the original input plus a `results` array of matches (each with `recording_mbid`, `recording_name`, `release_name`, `artist_credit_name`).
+The script returns a JSON array where each element contains the original input plus a `results` array of matches (each with `recording_mbid`, `recording_name`, `release_name`, `release_mbid`, `artist_credit_name`, `artist_credit_id`).
 
 Process in batches of ~50 to avoid overwhelming stdout.
 
@@ -156,7 +156,7 @@ After user approval, build a JSON object with `mappings` and `deletions` arrays,
 
 ```bash
 echo '{"mappings": [...], "deletions": [...]}' | \
-    uv run python .claude/skills/map-listens/execute.py
+    uv run python -m lb_mapper.cli.execute
 ```
 
 Each mapping entry needs `recording_msid` and `recording_mbid`. Each deletion entry needs `listened_at` and `recording_msid`. The script handles rate limits internally and reports each action as it completes.
