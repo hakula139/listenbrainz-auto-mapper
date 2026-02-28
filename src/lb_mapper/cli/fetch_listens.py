@@ -27,7 +27,7 @@ def main() -> None:
     token = require_env('LB_TOKEN')
     user = require_env('LB_USER')
 
-    count = int(sys.argv[1]) if len(sys.argv) > 1 else 1000
+    count = int(sys.argv[1]) if len(sys.argv) > 1 else 100
 
     unlinked: list[dict[str, Any]] = []
     total = 0

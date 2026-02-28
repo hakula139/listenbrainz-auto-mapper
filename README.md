@@ -26,6 +26,7 @@ See [`.claude/skills/map-listens/SKILL.md`](.claude/skills/map-listens/SKILL.md)
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+- (Optional) [Codex](https://openai.com/index/codex/) MCP — offloads CJK artist name translation and parallel batch evaluation. Without it, Claude Code handles both directly using its own subagents.
 - A [ListenBrainz API token](https://listenbrainz.org/settings/)
 
 ## Setup
@@ -43,7 +44,7 @@ cp .env.example .env
 Inside Claude Code, from the repo root:
 
 ```text
-/map-listens        # find and process 1000 unlinked listens
+/map-listens        # find and process 100 unlinked listens
 /map-listens 500    # find and process 500 unlinked listens
 ```
 

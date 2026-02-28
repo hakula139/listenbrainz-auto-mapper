@@ -10,7 +10,7 @@ Map unlinked ListenBrainz listens to MusicBrainz recordings for the user specifi
 
 ## Invocation
 
-`/map-listens [count]` — count defaults to 1000.
+`/map-listens [count]` — count defaults to 100.
 
 ## Setup
 
@@ -30,14 +30,14 @@ The CJK translation cache is at `~/.cache/lb-mapper/translations.json` (JSON obj
 uv run python -m lb_mapper.cli.fetch_listens COUNT
 ```
 
-Replace `COUNT` with the number of **unlinked** listens to find (default 1000). The script paginates through history until enough unlinked listens are collected. It outputs JSON to stdout with `total` (scanned), `linked`, and `unlinked` fields. Report the totals to the user.
+Replace `COUNT` with the number of **unlinked** listens to find (default 100). The script paginates through history until enough unlinked listens are collected. It outputs JSON to stdout with `total` (scanned), `linked`, and `unlinked` fields. Report the totals to the user.
 
 ### Phase 2: Translate CJK Artists
 
 Load the translation cache from `~/.cache/lb-mapper/translations.json`. For any unlinked listen whose artist name contains CJK / Hangul / Kana characters (detected by `contains_cjk()` in `lb_mapper.lb_search`):
 
 1. Look up the artist in the cache. If found, use the cached translation.
-2. If NOT found in cache, use Codex MCP to translate: ask it to return ONLY the English equivalent of the artist name (it may be a katakana transliteration of a Western name, or a native CJK name).
+2. If NOT found in cache, translate the artist name to its English equivalent (it may be a katakana transliteration of a Western name, or a native CJK name). If Codex MCP is available, delegate the translation to it; otherwise, translate directly.
 3. Update the cache file after translating new names.
 
 ### Phase 3: Search
@@ -72,8 +72,8 @@ This is the core intelligence. For each listen with search results, reason about
 
 - Titles must refer to the **same recording**, not just share some words.
 - Short titles (one or two common words like "Alive", "Home", "Love") are inherently ambiguous — require stronger artist + release evidence before accepting.
-- Ignore annotation differences: "(TV Edit)", "[Deluxe]", "(Arr. for Piano)", "(feat. X)" — these are metadata noise, not identity.
-- "(Orchestral Version)" vs the original — these ARE different recordings; only accept if the match also says orchestral / the release context confirms it.
+- Annotations present on only one side — "(TV Edit)", "[Deluxe]", "(Arr. for Piano)", "(feat. X)" — are generally noise. Accept if the underlying work is the same; MB titles often omit what the listen includes.
+- Conflicting version indicators on both sides — e.g., listen says "Orchestral Version" but match says "Acoustic" — indicate genuinely different recordings. Reject unless the release context reconciles them.
 
 #### Title Matching — Classical Music
 
@@ -87,15 +87,18 @@ Classical titles encode precise work identity. Two recordings that share a gener
 Example rejections:
 
 <!-- cspell:disable -->
-- Listen: "6 Introduttioni teatrali, Op. 4: No. 1 ... II. Allegro" vs Match: "Sonata ... op. 6 no. 12: II. Allegro" — different opus, different work number, completely different piece
-- Listen: "60 Etudes for Piano: No. 3 in A Minor" vs Match: "Piano Sonata no. 2 in G-sharp minor" — different genre, different number, different key
-- Listen: "Cello Sonata, FP 143: II. Cavatine" vs Match: "Sonata for violin and piano: Intermezzo" — different instrument, different movement
+- Listen: "Nocturne in E-flat major, Op. 9 No. 2" vs Match: "Nocturne in B-flat minor, Op. 9 No. 1" — same opus, but different nocturne and different key
+- Listen: "Violin Concerto in D major, Op. 77: II. Adagio" vs Match: "Violin Concerto in D major, Op. 77: III. Allegro giocoso" — same concerto, wrong movement
+- Listen: "Prelude and Fugue in C major, BWV 846" vs Match: "Prelude and Fugue in C minor, BWV 871" — both preludes and fugues in C, but different BWV (WTC Book I vs Book II)
 <!-- cspell:enable -->
 
 Example acceptance:
 
 <!-- cspell:disable -->
 - Listen: "Lakme, Act 1: Duo des fleurs (Transcr. Ducros for Cello Ensemble) [Classical Session]" vs Match: "Lakme: Act 1: Duo des fleurs" — same work, arrangement annotation is noise
+- Listen: "Mozart: Piano Sonata K. 331: III. Rondo alla Turca" vs Match: "Piano Sonata no. 11 in A major, KV 331: III. Alla turca" — same piece; K. and KV are equivalent catalog abbreviations, "Rondo alla Turca" is the popular name for the "Alla turca" movement
+- Listen: "Beethoven: Moonlight Sonata: I. Adagio sostenuto" vs Match: "Piano Sonata no. 14 in C-sharp minor, op. 27 no. 2: I. Adagio sostenuto" — "Moonlight Sonata" is the nickname for Op. 27 No. 2
+- Listen: "Schubert: Die Forelle, D. 550" vs Match: "The Trout, op. 32, D 550" — same lied, German vs English title, matching Deutsch catalog number confirms identity
 <!-- cspell:enable -->
 
 #### CJK / Katakana Handling
@@ -163,11 +166,10 @@ Each mapping entry needs `recording_msid` and `recording_mbid`. Each deletion en
 
 ## Parallelism
 
-When evaluating a large batch (50+ items), use Codex MCP to parallelize evaluation. Split the batch into chunks and send each chunk to a Codex session with the evaluation rules above. Collect results and merge before presenting.
+When evaluating a large batch (50+ items), parallelize evaluation. Split the batch into chunks and evaluate each chunk concurrently — use Codex MCP sessions if available, otherwise use Claude Code subagents. Collect results and merge before presenting.
 
 ## Important Notes
 
 - NEVER submit a mapping or delete a listen without explicit user approval.
 - The LB Labs search API (`/recording-search/json`) is the primary search tool — it uses Typesense with fuzzy matching and handles classical titles well.
-- The `review.jsonl` file at the repo root stores previously flagged items. Check it to avoid re-evaluating items the user has already seen.
 - Rate limits: LB API returns `X-RateLimit-Remaining` headers; the client sleeps automatically when near the limit. LB Labs has no explicit rate limit but be reasonable.
