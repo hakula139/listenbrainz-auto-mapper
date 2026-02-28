@@ -35,7 +35,7 @@ git clone https://github.com/hakula/listenbrainz-auto-mapper.git
 cd listenbrainz-auto-mapper
 uv sync
 cp .env.example .env
-# Edit .env and fill in your ListenBrainz token
+# Edit .env and fill in your ListenBrainz username and token
 ```
 
 ## Usage
