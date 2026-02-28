@@ -13,27 +13,19 @@ Outputs JSON to stdout:
 from __future__ import annotations
 
 import json
-import os
 import sys
 from typing import Any
 
 from dotenv import load_dotenv
 
+from lb_mapper.cli import require_env
 from lb_mapper.lb_client import ListenBrainzClient
 
 
 def main() -> None:
     load_dotenv()
-
-    token = os.environ.get('LB_TOKEN', '')
-    if not token:
-        print('LB_TOKEN not set', file=sys.stderr)
-        sys.exit(1)
-
-    user = os.environ.get('LB_USER', '')
-    if not user:
-        print('LB_USER not set', file=sys.stderr)
-        sys.exit(1)
+    token = require_env('LB_TOKEN')
+    user = require_env('LB_USER')
 
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 1000
 

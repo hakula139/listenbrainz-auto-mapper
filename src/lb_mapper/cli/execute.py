@@ -14,26 +14,53 @@ Usage:
 from __future__ import annotations
 
 import json
-import os
 import sys
+from collections.abc import Callable
+from typing import Any
 
 import httpx
 from dotenv import load_dotenv
 
+from lb_mapper.cli import require_env
 from lb_mapper.lb_client import ListenBrainzClient
+
+
+_MSID_DISPLAY_LEN = 12
+
+
+def _apply_batch(
+    items: list[dict[str, Any]],
+    action: Callable[[dict[str, Any]], None],
+    verb: str,
+) -> int:
+    """Apply *action* to each item, printing progress. Return success count."""
+    ok = 0
+    for i, item in enumerate(items, 1):
+        try:
+            msid = item['recording_msid'][:_MSID_DISPLAY_LEN]
+            action(item)
+            print(
+                f'  [{i}/{len(items)}] {verb} {msid}...',
+                file=sys.stderr,
+                flush=True,
+            )
+            ok += 1
+        except (httpx.HTTPError, KeyError, TypeError) as exc:
+            print(
+                f'  [{i}/{len(items)}] ERROR: {type(exc).__name__}: {exc}',
+                file=sys.stderr,
+                flush=True,
+            )
+    return ok
 
 
 def main() -> None:
     load_dotenv()
-
-    token = os.environ.get('LB_TOKEN', '')
-    if not token:
-        print('LB_TOKEN not set', file=sys.stderr)
-        sys.exit(1)
+    token = require_env('LB_TOKEN')
 
     data = json.loads(sys.stdin.read())
-    mappings = data.get('mappings', [])
-    deletions = data.get('deletions', [])
+    mappings: list[dict[str, Any]] = data.get('mappings', [])
+    deletions: list[dict[str, Any]] = data.get('deletions', [])
 
     mapped_ok = 0
     deleted_ok = 0
@@ -45,22 +72,13 @@ def main() -> None:
                 file=sys.stderr,
                 flush=True,
             )
-            for i, m in enumerate(mappings, 1):
-                try:
-                    msid = m['recording_msid'][:12]
-                    lb.submit_mapping(m['recording_msid'], m['recording_mbid'])
-                    print(
-                        f'  [{i}/{len(mappings)}] MAPPED {msid}...',
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    mapped_ok += 1
-                except (httpx.HTTPError, KeyError) as exc:
-                    print(
-                        f'  [{i}/{len(mappings)}] ERROR: {type(exc).__name__}: {exc}',
-                        file=sys.stderr,
-                        flush=True,
-                    )
+            mapped_ok = _apply_batch(
+                mappings,
+                action=lambda m: lb.submit_mapping(
+                    m['recording_msid'], m['recording_mbid']
+                ),
+                verb='MAPPED',
+            )
 
         if deletions:
             print(
@@ -68,22 +86,13 @@ def main() -> None:
                 file=sys.stderr,
                 flush=True,
             )
-            for i, d in enumerate(deletions, 1):
-                try:
-                    msid = d['recording_msid'][:12]
-                    lb.delete_listen(d['listened_at'], d['recording_msid'])
-                    print(
-                        f'  [{i}/{len(deletions)}] DELETED {msid}...',
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    deleted_ok += 1
-                except (httpx.HTTPError, KeyError) as exc:
-                    print(
-                        f'  [{i}/{len(deletions)}] ERROR: {type(exc).__name__}: {exc}',
-                        file=sys.stderr,
-                        flush=True,
-                    )
+            deleted_ok = _apply_batch(
+                deletions,
+                action=lambda d: lb.delete_listen(
+                    d['listened_at'], d['recording_msid']
+                ),
+                verb='DELETED',
+            )
 
     print(
         f'Done: {mapped_ok}/{len(mappings)} mapped, '
