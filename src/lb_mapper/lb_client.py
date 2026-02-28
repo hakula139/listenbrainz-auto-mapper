@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import types
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -10,9 +11,11 @@ from typing import Any
 import httpx
 
 
+__all__ = ['Listen', 'ListenBrainzClient']
+
 BASE_URL = 'https://api.listenbrainz.org'
 _API_PAGE_LIMIT = 100
-_MAX_RETRIES = 3
+_MAX_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -63,7 +66,7 @@ class ListenBrainzClient:
         self,
         _exc_type: type[BaseException] | None,
         _exc_val: BaseException | None,
-        _exc_tb: object,
+        _exc_tb: types.TracebackType | None,
     ) -> None:
         self.close()
 
@@ -96,9 +99,14 @@ class ListenBrainzClient:
             if not added:
                 return
 
-            # Include the boundary timestamp so we don't skip listens
-            # sharing the same second. The ``seen`` set filters duplicates.
-            max_ts = listens_data[-1]['listened_at'] + 1
+            # Prune: only entries at the boundary timestamp can reappear
+            # on the next page, so discard the rest to bound memory usage.
+            boundary_ts = listens_data[-1]['listened_at']
+            seen = {k for k in seen if k[0] == boundary_ts}
+
+            # max_ts is exclusive, so +1 re-requests the boundary second;
+            # the seen set deduplicates entries already yielded.
+            max_ts = boundary_ts + 1
 
     def fetch_listens(
         self, user: str, count: int = 50, max_ts: int | None = None
@@ -133,7 +141,7 @@ class ListenBrainzClient:
 
     def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         """Make an HTTP request with rate-limit awareness and 429 retry."""
-        retries_left = _MAX_RETRIES
+        retries_left = _MAX_ATTEMPTS
         while True:
             resp = self._client.request(method, url, **kwargs)
             retries_left -= 1
