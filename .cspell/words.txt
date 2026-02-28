@@ -1,14 +1,14 @@
+bandit
 dotenv
 httpx
-liblistenbrainz
+isort
 listenbrainz
 mbid
 msid
 musicbrainz
-musicbrainzngs
 mypy
 pycache
 pyproject
 scrobblers
+typesense
 venv
-yorushika

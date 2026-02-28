@@ -17,5 +17,25 @@ packages = ["src/lb_mapper"]
 [dependency-groups]
 dev = [
     "mypy>=1.19.1",
+    "pre-commit>=4.5.1",
     "ruff>=0.15.2",
 ]
+
+[tool.ruff]
+target-version = "py312"
+src = ["src"]
+
+[tool.ruff.format]
+quote-style = "single"
+line-ending = "lf"
+
+[tool.ruff.lint]
+select = ["B", "C4", "E", "F", "I", "SIM", "UP", "W"]
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
+split-on-trailing-comma = true
+combine-as-imports = true
+
+[tool.mypy]
+strict = true
