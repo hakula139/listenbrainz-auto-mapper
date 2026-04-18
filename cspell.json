@@ -11,5 +11,5 @@
     }
   ],
   "dictionaries": ["project-words"],
-  "ignorePaths": ["uv.lock"]
+  "ignorePaths": ["uv.lock", ".claude/"]
 }

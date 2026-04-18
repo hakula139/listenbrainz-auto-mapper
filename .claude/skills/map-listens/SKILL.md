@@ -23,9 +23,7 @@ The project lives at the repo root. The `.env` file contains `LB_TOKEN` and `LB_
 The translation cache at `~/.cache/lb-mapper/translations.json` is a flat JSON object that stores alias pairs in BOTH directions:
 
 - **JA → EN** (primary use): scrobbled CJK artist / title → English equivalent, e.g. `"椎名林檎" → "Sheena Ringo"`, `"ゴルトベルク変奏曲 BWV 988: アリア" → "Goldberg Variations, BWV 988: Aria"`
-<!-- cspell:disable -->
 - **EN → native** (fallback): romanized Japanese title or English band name → native-script equivalent, e.g. `"Noudouteki Sanpunkan - 3 Min." → "能動的三分間"`, `"Tokyo Incidents" → "東京事変"`
-<!-- cspell:enable -->
 
 The cache is bidirectional by convention — add entries in whichever direction is useful. Lookup is a plain `cache.get(key)` in either direction.
 
@@ -104,10 +102,8 @@ When the primary search returned zero results AND the artist field is a multi-ar
 
 When the artist is a **romanized or English-form Japanese act** and the primary search returned zero or only clearly-wrong results, translate the track title from romaji back to its native script and re-search. Signals that the artist is a Japanese act whose MB credit uses native script:
 
-<!-- cspell:disable -->
 - Well-known Japanese band / artist with a canonical English name (`Tokyo Incidents` ↔ `東京事変`, `Sheena Ringo` ↔ `椎名林檎`, `Yuki Kajiura`, `SawanoHiroyuki[nZk]`, etc.)
 - Track title looks like romanized Japanese (e.g. `Noudouteki Sanpunkan`, `Hatsukoiwa Makekaku`, `Sakura`).
-<!-- cspell:enable -->
 - Reverse translation can be inferred from romaji with reasonable confidence.
 
 Store the reverse translation in the cache so subsequent runs short-circuit. If reverse translation is uncertain, flag the listen for review rather than guessing.
@@ -126,7 +122,7 @@ When the batch is ≥ 50 items, parallelize: split into chunks of ~100, spawn on
 
 - `artist_credit_name` must plausibly refer to the same artist(s) as the listen.
 - Separator variations (`&`, `,`, `feat.`, `and`) are equivalent.
-- Minor spelling / accent differences are OK (e.g. `Capuccelli` ≈ `Capucelli`).  <!-- cspell:disable-line -->
+- Minor spelling / accent differences are OK (e.g. `Capuccelli` ≈ `Capucelli`).
 - **Substring false positives are mismatches**: `Foster` ≠ `Neil Foster` ≠ `Kendra Foster`.
 - CJK artists may appear directly in MB credits as aliases — check both the original and the translation against the credit.
 - For romanized Japanese acts, check both the English form and the native form (e.g. `Tokyo Incidents` AND `東京事変`).
@@ -151,8 +147,6 @@ When a Bach / Mozart / Beethoven / etc. catalog mismatch exists (e.g. listen say
 
 ##### Rejections
 
-<!-- cspell:disable -->
-
 - Listen `Nocturne in E-flat major, Op. 9 No. 2` vs match `Nocturne in B-flat minor, Op. 9 No. 1` — same opus, different nocturne and key.
 - Listen `Violin Concerto in D major, Op. 77: II. Adagio` vs match `... III. Allegro giocoso` — wrong movement.
 - Listen `Prelude and Fugue in C major, BWV 846` vs match `... in C minor, BWV 871` — both C-something preludes-and-fugues, but WTC Book I vs Book II.
@@ -164,8 +158,6 @@ When a Bach / Mozart / Beethoven / etc. catalog mismatch exists (e.g. listen say
 - Listen `Mozart: Piano Sonata K. 331: III. Rondo alla Turca` vs match `Piano Sonata no. 11 in A major, KV 331: III. Alla turca` — `K.` ≡ `KV`; `Rondo alla Turca` is the nickname for the `Alla turca` movement.
 - Listen `Beethoven: Moonlight Sonata: I. Adagio sostenuto` vs match `Piano Sonata no. 14 in C-sharp minor, op. 27 no. 2: I. Adagio sostenuto` — `Moonlight Sonata` = Op. 27 No. 2.
 - Listen `Schubert: Die Forelle, D. 550` vs match `The Trout, op. 32, D 550` — same lied; matching D. number confirms identity despite language.
-
-<!-- cspell:enable -->
 
 #### CJK / Katakana Handling
 
@@ -190,7 +182,6 @@ A listen with a CJK-translated track title (e.g. `ピアノ協奏曲 第3番 ニ
 
 ##### Mixed scripts
 
-<!-- cspell:disable-next-line -->
 Artists with mixed katakana + Latin (e.g. `キャロル&チューズデイ(Vo.Nai Br.XX&Celeina Ann)`) are NOT auto-deleted; many have legitimate MB entries.
 
 #### Verdict Categories

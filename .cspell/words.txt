@@ -1,7 +1,6 @@
 bandit
 bopomofo
 dotenv
-giocoso
 httpx
 isort
 listenbrainz
@@ -11,8 +10,6 @@ musicbrainz
 mypy
 pycache
 pyproject
-romaji
-scrobble
 scrobblers
 typesense
 venv
