@@ -20,120 +20,202 @@ The project lives at the repo root. The `.env` file contains `LB_TOKEN` and `LB_
 - `lb_mapper.cli.search_batch` — batch search LB Labs for recording matches
 - `lb_mapper.cli.execute` — submit approved mappings and delete approved listens
 
-The CJK translation cache is at `~/.cache/lb-mapper/translations.json` (JSON object mapping original artist names to English translations).
+The translation cache at `~/.cache/lb-mapper/translations.json` is a flat JSON object that stores alias pairs in BOTH directions:
+
+- **JA → EN** (primary use): scrobbled CJK artist / title → English equivalent, e.g. `"椎名林檎" → "Sheena Ringo"`, `"ゴルトベルク変奏曲 BWV 988: アリア" → "Goldberg Variations, BWV 988: Aria"`
+<!-- cspell:disable -->
+- **EN → native** (fallback): romanized Japanese title or English band name → native-script equivalent, e.g. `"Noudouteki Sanpunkan - 3 Min." → "能動的三分間"`, `"Tokyo Incidents" → "東京事変"`
+<!-- cspell:enable -->
+
+The cache is bidirectional by convention — add entries in whichever direction is useful. Lookup is a plain `cache.get(key)` in either direction.
 
 ## Pipeline
 
-### Phase 1: Fetch and Filter
+```text
+Phase 1  Fetch unlinked listens
+Phase 2  Translate CJK → EN (primary)
+Phase 3  Primary search (LB Labs)
+Phase 4  Weak-match recovery (EN → native, simplified artist)
+Phase 5  Evaluate matches (LLM, parallel when ≥ 50 items)
+Phase 6  Present for approval
+Phase 7  Execute approved mappings + deletions
+```
+
+All retry / recovery strategies live in the orchestration layer (this skill). The Python `search_batch` script is intentionally simple — it runs one primary query per item with a single CJK-artist fallback. Any further recovery is the orchestrator's job.
+
+### Phase 1: Fetch
 
 ```bash
 uv run python -m lb_mapper.cli.fetch_listens COUNT
 ```
 
-Replace `COUNT` with the number of **unlinked** listens to find (default 100). The script paginates through history until enough unlinked listens are collected. It outputs JSON to stdout with `total` (scanned), `linked`, and `unlinked` fields. Report the totals to the user.
+Paginates history until `COUNT` **unlinked** listens are collected. Outputs JSON on stdout: `{total, linked, unlinked: [...]}`. Each listen has `listened_at`, `recording_msid`, `artist`, `track`, `release`. Report totals to the user.
 
-### Phase 2: Translate CJK Artists and Titles
+### Phase 2: Translate CJK → EN
 
-Load the translation cache from `~/.cache/lb-mapper/translations.json`. The cache stores translations for both artist names and track titles (keyed by the original string).
+Load the cache. For each unlinked listen, use `contains_cjk()` from `lb_mapper.lb_search` to detect CJK / Hangul / Kana in both `artist` and `track`.
 
-**Artists**: For any unlinked listen whose artist name contains CJK / Hangul / Kana characters (detected by `contains_cjk()` in `lb_mapper.lb_search`):
+For each CJK string:
 
-1. Look up the artist in the cache. If found, use the cached translation.
-2. If NOT found in cache, translate the artist name to its English equivalent (it may be a katakana transliteration of a Western name, or a native CJK name). If Codex MCP is available, delegate the translation to it; otherwise, translate directly.
-3. Update the cache file after translating new names.
+1. Cache hit → use cached translation.
+2. Cache miss → translate now. The string may be:
+   - A katakana **transliteration** of a Western name (e.g. `アルフレッド・ブレンデル` → `Alfred Brendel`).
+   - A **native** kanji / hiragana name (e.g. `椎名林檎` → `Sheena Ringo`).
+   - A **localized** classical title (e.g. `ピアノ協奏曲 第3番 ニ短調 作品30` → `Piano Concerto No. 3 in D minor, Op. 30`).
+   - **Mixed-script** where only CJK portions need translation; preserve Latin segments verbatim.
+3. Persist new translations back to the cache.
 
-**Titles**: For any unlinked listen whose track title contains CJK characters, translate the title to its English equivalent following the same cache-lookup-then-translate pattern. Japanese streaming services often localize Western classical titles (e.g., "ピアノ協奏曲 第3番 ニ短調 作品30" → "Piano Concerto No. 3 in D minor, Op. 30"). Mixed titles (CJK + Latin, e.g., "ピアノ協奏曲 第3番 ニ短調 作品30: 第3楽章 Finale. Alla breve") should have only the CJK portions translated while preserving the Latin segments.
+Delegate bulk translation to Codex MCP when available.
 
-### Phase 3: Search
+### Phase 3: Primary Search
 
-Use the helper script to batch-search. Pipe a JSON array of objects to stdin:
+Build one query per listen:
+
+```json
+{
+  "artist": "<translated if CJK else original>",
+  "track":  "<translated if CJK else original>",
+  "release": "<original release or empty>",
+  "original_artist": "<original CJK artist, else empty>"
+}
+```
+
+Batch in chunks of ~50 and pipe to stdin:
 
 ```bash
 echo '$JSON_ARRAY' | uv run python -m lb_mapper.cli.search_batch
 ```
 
-Each object has fields: `artist` (translated name if CJK, otherwise original), `track` (translated title if CJK, otherwise original), `release`, and `original_artist` (the raw artist name from the listen — set to empty string if no CJK translation was needed).
+The script runs one search per item against LB Labs (Typesense). If `original_artist` is CJK and the translated search returns zero results, it retries once with the original CJK artist. It returns `{...input, results: [...]}` per item; each result has `recording_mbid`, `recording_name`, `release_name`, `release_mbid`, `artist_credit_name`, `artist_credit_id`.
 
-The script searches LB Labs (Typesense) with the `artist` field first. If `original_artist` contains CJK and the first search returns no results, it retries with the original CJK name. If the track title was translated from CJK and the initial search returns no usable results, retry with the translated title to improve matching for localized metadata.
+### Phase 4: Weak-Match Recovery
 
-The script returns a JSON array where each element contains the original input plus a `results` array of matches (each with `recording_mbid`, `recording_name`, `release_name`, `release_mbid`, `artist_credit_name`, `artist_credit_id`).
+Before evaluation, attempt one more search for items that are likely recoverable:
 
-Process in batches of ~50 to avoid overwhelming stdout.
+#### 4a. Simplified-artist retry
 
-### Phase 4: Evaluate Matches (LLM Reasoning)
+When the primary search returned zero results AND the artist field is a multi-artist credit (contains `&`, `,`, or `feat.`), re-search with just the first artist. This rescues classical recordings whose Typesense index entry doesn't include the full "soloist, orchestra & conductor" string.
 
-This is the core intelligence. For each listen with search results, reason about whether the top result is the correct match. Do NOT use hardcoded thresholds. Instead, apply these domain rules:
+```python
+# first artist = re.split(r'\s*[,&]\s*|\s+feat\.\s+', artist)[0].strip()
+```
+
+#### 4b. Reverse-direction (EN → native) retry
+
+When the artist is a **romanized or English-form Japanese act** and the primary search returned zero or only clearly-wrong results, translate the track title from romaji back to its native script and re-search. Signals that the artist is a Japanese act whose MB credit uses native script:
+
+<!-- cspell:disable -->
+- Well-known Japanese band / artist with a canonical English name (`Tokyo Incidents` ↔ `東京事変`, `Sheena Ringo` ↔ `椎名林檎`, `Yuki Kajiura`, `SawanoHiroyuki[nZk]`, etc.)
+- Track title looks like romanized Japanese (e.g. `Noudouteki Sanpunkan`, `Hatsukoiwa Makekaku`, `Sakura`).
+<!-- cspell:enable -->
+- Reverse translation can be inferred from romaji with reasonable confidence.
+
+Store the reverse translation in the cache so subsequent runs short-circuit. If reverse translation is uncertain, flag the listen for review rather than guessing.
+
+#### 4c. Merge
+
+Merge recovered results into the primary result set. Track a `retry_used` flag on recovered items so Phase 5 can weight them accordingly.
+
+### Phase 5: Evaluate Matches
+
+For each listen, decide the verdict using the top ~5 candidates. Do NOT use hardcoded thresholds — apply the domain rules below as reasoning steps.
+
+When the batch is ≥ 50 items, parallelize: split into chunks of ~100, spawn one evaluator per chunk (Codex MCP session or Claude Code subagent), and merge JSON verdicts.
 
 #### Artist Verification
 
-- The match's `artist_credit_name` must plausibly refer to the same artist(s) as the listen.
-- Account for separator differences: `&` vs `,` vs `feat.` vs `and` are equivalent.
-- Account for minor spelling variations (e.g., "Capuccelli" vs "Capucelli"). <!-- cspell:disable-line -->
-- Watch for **substring false positives**: "Foster" as an artist should NOT match "Neil Foster" or "Kendra Foster" — these are different artists. A short artist name appearing as a substring of a longer, different name is a mismatch.
-- CJK artist names may appear directly in MB credits as aliases. Check both the translated name AND the original against the credit.
+- `artist_credit_name` must plausibly refer to the same artist(s) as the listen.
+- Separator variations (`&`, `,`, `feat.`, `and`) are equivalent.
+- Minor spelling / accent differences are OK (e.g. `Capuccelli` ≈ `Capucelli`).  <!-- cspell:disable-line -->
+- **Substring false positives are mismatches**: `Foster` ≠ `Neil Foster` ≠ `Kendra Foster`.
+- CJK artists may appear directly in MB credits as aliases — check both the original and the translation against the credit.
+- For romanized Japanese acts, check both the English form and the native form (e.g. `Tokyo Incidents` AND `東京事変`).
 
 #### Title Matching — General
 
-- Titles must refer to the **same recording**, not just share some words.
-- Short titles (one or two common words like "Alive", "Home", "Love") are inherently ambiguous — require stronger artist + release evidence before accepting.
-- Annotations present on only one side — "(TV Edit)", "[Deluxe]", "(Arr. for Piano)", "(feat. X)" — are generally noise. Accept if the underlying work is the same; MB titles often omit what the listen includes.
-- Conflicting version indicators on both sides — e.g., listen says "Orchestral Version" but match says "Acoustic" — indicate genuinely different recordings. Reject unless the release context reconciles them.
+- Same recording, not just overlapping words.
+- Short / generic titles (`Alive`, `Home`, `Love`, `Shine`) need stronger artist + release corroboration.
+- **One-sided annotations** — `(TV Edit)`, `[Deluxe]`, `(Arr. for Piano)`, `(feat. X)`, `(Live)` — are usually noise. Accept if the underlying work matches.
+- **Two-sided conflicts** — e.g. listen `"Orchestral Version"` vs match `"Acoustic"` — indicate different recordings; reject unless release context reconciles.
 
-#### Title Matching — Classical Music
+#### Title Matching — Classical Music (strict)
 
-Classical titles encode precise work identity. Two recordings that share a generic title ("Allegro", "Sonata") but differ in any of these identifiers are **different works**:
+Classical titles encode precise work identity. Two recordings that share a generic word (`Allegro`, `Sonata`, `Prelude`) but differ in any of the following are **different works**:
 
-- **Catalog numbers**: Op. / Opus, K. / KV (Mozart), BWV (Bach), TWV (Telemann), HWV (Handel), RV (Vivaldi), Wq (C.P.E. Bach), D. (Schubert), S. (Liszt), Hob. (Haydn)
-- **Work numbers**: No. / Nr. within an opus
-- **Key signatures**: "in C Major" vs "in B-flat Minor" — different works entirely
-- **Movement markings**: If the listen specifies a movement (e.g., "II. Allegro") and the match is a different movement or the complete work, that is a mismatch
+- **Catalog numbers**: Op./Opus, K./KV (Mozart), BWV (Bach), TWV (Telemann), HWV (Handel), RV (Vivaldi), Wq (C.P.E. Bach), D. (Schubert), S. (Liszt), Hob. (Haydn), WoO (Beethoven works without opus number), MWV (Mendelssohn).
+- **Work number within an opus**: `No. 2` vs `No. 1` in the same opus → different work.
+- **Key signature**: `C major` vs `B-flat minor` → different work.
+- **Movement marking**: if the listen specifies `II. Allegro` and the candidate is `III. Allegro giocoso` or the whole work, that's a mismatch.
 
-Example rejections:
+When a Bach / Mozart / Beethoven / etc. catalog mismatch exists (e.g. listen says `BWV 1178`, all candidates say `WoO 31`), reject even though the artist matches — see deletion rule below.
 
-<!-- cspell:disable -->
-- Listen: "Nocturne in E-flat major, Op. 9 No. 2" vs Match: "Nocturne in B-flat minor, Op. 9 No. 1" — same opus, but different nocturne and different key
-- Listen: "Violin Concerto in D major, Op. 77: II. Adagio" vs Match: "Violin Concerto in D major, Op. 77: III. Allegro giocoso" — same concerto, wrong movement
-- Listen: "Prelude and Fugue in C major, BWV 846" vs Match: "Prelude and Fugue in C minor, BWV 871" — both preludes and fugues in C, but different BWV (WTC Book I vs Book II)
-<!-- cspell:enable -->
-
-Example acceptance:
+##### Rejections
 
 <!-- cspell:disable -->
-- Listen: "Lakme, Act 1: Duo des fleurs (Transcr. Ducros for Cello Ensemble) [Classical Session]" vs Match: "Lakme: Act 1: Duo des fleurs" — same work, arrangement annotation is noise
-- Listen: "Mozart: Piano Sonata K. 331: III. Rondo alla Turca" vs Match: "Piano Sonata no. 11 in A major, KV 331: III. Alla turca" — same piece; K. and KV are equivalent catalog abbreviations, "Rondo alla Turca" is the popular name for the "Alla turca" movement
-- Listen: "Beethoven: Moonlight Sonata: I. Adagio sostenuto" vs Match: "Piano Sonata no. 14 in C-sharp minor, op. 27 no. 2: I. Adagio sostenuto" — "Moonlight Sonata" is the nickname for Op. 27 No. 2
-- Listen: "Schubert: Die Forelle, D. 550" vs Match: "The Trout, op. 32, D 550" — same lied, German vs English title, matching Deutsch catalog number confirms identity
+
+- Listen `Nocturne in E-flat major, Op. 9 No. 2` vs match `Nocturne in B-flat minor, Op. 9 No. 1` — same opus, different nocturne and key.
+- Listen `Violin Concerto in D major, Op. 77: II. Adagio` vs match `... III. Allegro giocoso` — wrong movement.
+- Listen `Prelude and Fugue in C major, BWV 846` vs match `... in C minor, BWV 871` — both C-something preludes-and-fugues, but WTC Book I vs Book II.
+- Listen `Chaconne and Fugue in D Minor, BWV 1178` vs match `Fugue in D Major, WoO 31` — different composer catalog (Bach vs Beethoven).
+
+##### Acceptances
+
+- Listen `Lakme, Act 1: Duo des fleurs (Transcr. Ducros for Cello Ensemble) [Classical Session]` vs match `Lakme: Act 1: Duo des fleurs` — arrangement and release annotations are noise.
+- Listen `Mozart: Piano Sonata K. 331: III. Rondo alla Turca` vs match `Piano Sonata no. 11 in A major, KV 331: III. Alla turca` — `K.` ≡ `KV`; `Rondo alla Turca` is the nickname for the `Alla turca` movement.
+- Listen `Beethoven: Moonlight Sonata: I. Adagio sostenuto` vs match `Piano Sonata no. 14 in C-sharp minor, op. 27 no. 2: I. Adagio sostenuto` — `Moonlight Sonata` = Op. 27 No. 2.
+- Listen `Schubert: Die Forelle, D. 550` vs match `The Trout, op. 32, D 550` — same lied; matching D. number confirms identity despite language.
+
 <!-- cspell:enable -->
 
 #### CJK / Katakana Handling
 
-<!-- cspell:disable -->
-- Katakana artist names with zero usable search results across all search strategies should be flagged for **deletion** — they are likely bad scrobbles from Japanese streaming services that will never match. "Katakana artist" means the name is composed of katakana (transliterating a Western name), even if it includes standard Japanese ensemble / instrument suffixes in kanji such as 四重奏団 (quartet), 管弦楽団 (orchestra), 室内管弦楽団 (chamber orchestra), 交響楽団 (symphony orchestra), or 合唱団 (choir). These suffixes do not make the artist "mixed-script" — the core name is still a transliteration.
-- Listens with CJK-translated track titles (e.g., "ピアノ協奏曲 第3番 ニ短調 作品30") that still have no usable match after title translation and re-search should also be flagged for **deletion**. These are localized metadata from Japanese streaming services — if the translated English title also fails to match, the specific recording is unlikely to exist in MB.
-- Mixed scripts (katakana + Latin, e.g., "キャロル&チューズデイ(Vo.Nai Br.XX&Celeina Ann)") should NOT be auto-deleted; these often have legitimate MB entries. Likewise, artists with genuine kanji names (e.g., 辻井伸行, 角野隼斗) are native Japanese artists and should NOT be auto-deleted.
-<!-- cspell:enable -->
+##### Katakana-only artist
+
+A **katakana-only artist** is one whose core name is pure katakana (transliterating a non-Japanese name). Standard Japanese ensemble / instrument suffixes in kanji — `四重奏団` (quartet), `管弦楽団` (orchestra), `室内管弦楽団` (chamber orchestra), `交響楽団` (symphony orchestra), `合唱団` (choir) — do NOT disqualify it. The core name is still a transliteration.
+
+Verdict rule:
+
+- If the primary search, the simplified-artist retry (Phase 4a), and the CJK-artist fallback all fail to produce **any candidate that would survive the evaluation rules above**, verdict is `delete`.
+- Note: "no usable result" means no evaluation-compatible candidate, NOT just literal zero rows. If candidates exist but every one fails the classical work-identity check (wrong BWV, wrong key, wrong movement, or plainly different artist), that counts as no usable result.
+
+Rationale: these are bad scrobbles from Japanese streaming services whose metadata never propagated into MusicBrainz. Keeping them as `skip` re-evaluates the same doomed candidates on every future run.
+
+##### Native-script artist (kanji / hiragana)
+
+Artists whose core name is kanji or hiragana (e.g. `椎名林檎`, `藤田真央`, `街風めい`, `辻井伸行`, `角野隼斗`) are **native Japanese artists** with legitimate MB entries. Do NOT auto-delete. If no match is found, verdict is `skip`.
+
+##### CJK-localized track title
+
+A listen with a CJK-translated track title (e.g. `ピアノ協奏曲 第3番 ニ短調 作品30`) that yields no evaluation-compatible candidate after title translation AND reverse-direction retry → `delete`. These are localized classical metadata; if even the English work title doesn't find the recording, it's unlikely to exist in MB.
+
+##### Mixed scripts
+
+<!-- cspell:disable-next-line -->
+Artists with mixed katakana + Latin (e.g. `キャロル&チューズデイ(Vo.Nai Br.XX&Celeina Ann)`) are NOT auto-deleted; many have legitimate MB entries.
 
 #### Verdict Categories
 
-Classify each listen into one of:
+| Verdict  | Meaning                                                                                                                                                                                                                            |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `link`   | Confident match: same work, compatible artist, title identifies the same recording.                                                                                                                                                |
+| `review` | Plausible but ambiguous: short title, larger ensemble credit, arrangement differences, partial title overlap.                                                                                                                      |
+| `skip`   | No usable match. Native-Japanese artist with no hit, or non-CJK listen with weak candidates. Leave for future runs.                                                                                                                |
+| `delete` | Bad listen that will never match. Triggers: (1) katakana-only artist with no evaluation-compatible candidate after all retries, (2) CJK-localized track title with no evaluation-compatible candidate after translation + retries. |
 
-1. **link** — Confident match. Same work, compatible artist, title clearly identifies the same recording.
-2. **review** — Uncertain. Plausible but ambiguous (short title, only partial title overlap, arrangement differences, artist credit includes the expected name but is a larger ensemble).
-3. **skip** — No usable match found. Leave for future processing.
-4. **delete** — Bad listen that will never match (katakana artist with no results, CJK-translated title with no results after translation, garbled metadata).
+**Skip vs delete boundary**: the question is *"could a future search reasonably find a match?"* If yes → `skip`. If no (bad scrobble that will never resolve) → `delete`.
 
-### Phase 5: Present Results for Approval
+### Phase 6: Present for Approval
 
-Present results in a structured batch for user review. Group by verdict:
+Group by verdict. Never execute without explicit user approval.
 
-**Links (N items)** — show each as:
+**Links (N items)** — each:
 
 ```text
 [artist] — [track]
   -> [match_artist] — [match_title] ([recording_mbid])
 ```
 
-**Reviews (N items)** — show each with a brief note on why it is uncertain:
+**Reviews (N items)** — each with a one-line note:
 
 ```text
 [artist] — [track]
@@ -141,40 +223,54 @@ Present results in a structured batch for user review. Group by verdict:
   Note: [reason for uncertainty]
 ```
 
-**Deletions (N items)** — show each with reason:
+**Deletions (N items)** — each with a reason:
 
 ```text
 [artist] — [track] (listened_at: [timestamp])
   Reason: [why this should be deleted]
 ```
 
-**Skips (N items)** — just list them briefly.
+**Skips (N items)** — list briefly.
 
-Wait for user confirmation before executing anything. The user may:
+For large batches (> ~30 items per group), write the full detail to a temp file (e.g. `/tmp/review.md`) and show a summary + file path in the chat. Always show reviews and deletions inline since they require judgement.
+
+User options:
 
 - Approve all
 - Approve links only
-- Cherry-pick specific items
-- Override verdicts (move a "review" to "link" or "skip")
-- Ask for re-evaluation of specific items
+- Approve links + deletions, defer reviews
+- Cherry-pick by idx
+- Override verdicts (promote review → link, or demote link → skip)
+- Re-evaluate specific items
 
-### Phase 6: Execute
+### Phase 7: Execute
 
-After user approval, build a JSON object with `mappings` and `deletions` arrays, then pipe it to the execute script:
+After approval:
 
 ```bash
 echo '{"mappings": [...], "deletions": [...]}' | \
     uv run python -m lb_mapper.cli.execute
 ```
 
-Each mapping entry needs `recording_msid` and `recording_mbid`. Each deletion entry needs `listened_at` and `recording_msid`. The script handles rate limits internally and reports each action as it completes.
+- Each mapping: `{recording_msid, recording_mbid}`.
+- Each deletion: `{listened_at, recording_msid}`.
+
+The script handles rate limits internally and reports per-action progress.
 
 ## Parallelism
 
-When evaluating a large batch (50+ items), parallelize evaluation. Split the batch into chunks and evaluate each chunk concurrently — use Codex MCP sessions if available, otherwise use Claude Code subagents. Collect results and merge before presenting.
+For batches ≥ 50 items during Phase 5, parallelize:
+
+1. Split listens into ~100-item chunks.
+2. Prepare one input JSON file per chunk with listens + top-5 candidates.
+3. Spawn one evaluator per chunk — Codex MCP session preferred, Claude Code subagent as fallback.
+4. Each evaluator writes a verdict JSON `[{idx, verdict, recording_mbid, reason}, ...]`.
+5. Merge by `idx` after all complete.
 
 ## Important Notes
 
 - NEVER submit a mapping or delete a listen without explicit user approval.
-- The LB Labs search API (`/recording-search/json`) is the primary search tool — it uses Typesense with fuzzy matching and handles classical titles well.
-- Rate limits: LB API returns `X-RateLimit-Remaining` headers; the client sleeps automatically when near the limit. LB Labs has no explicit rate limit but be reasonable.
+- The LB Labs `/recording-search/json` endpoint is the only search backend. It uses Typesense with fuzzy matching and handles classical titles well.
+- Rate limits: the LB API returns `X-RateLimit-Remaining` headers; the Python client sleeps automatically when near the limit. LB Labs has no explicit rate limit; be reasonable.
+- The translation cache grows across runs — early runs are slower, later runs are faster.
+- When in doubt, prefer `skip` over `delete` for non-CJK listens. Deletion is irreversible.
