@@ -100,13 +100,14 @@ When the primary search returned zero results AND the artist field is a multi-ar
 
 #### 4b. Reverse-direction (EN → native) retry
 
-When the artist is a **romanized or English-form Japanese act** and the primary search returned zero or only clearly-wrong results, translate the track title from romaji back to its native script and re-search. Signals that the artist is a Japanese act whose MB credit uses native script:
+Trigger this retry **proactively** whenever the artist has an EN→native entry in the translation cache, without waiting for the primary search to fail. The primary search and reverse-direction search run as siblings; whichever yields a clean match wins. MB credits for Japanese acts are often indexed under native script only, so a Latin-form primary search may return nothing *or* return Typesense fallback hits (any track by the artist) that look like matches but aren't.
 
-- Well-known Japanese band / artist with a canonical English name (`Tokyo Incidents` ↔ `東京事変`, `Sheena Ringo` ↔ `椎名林檎`, `Yuki Kajiura`, `SawanoHiroyuki[nZk]`, etc.)
-- Track title looks like romanized Japanese (e.g. `Noudouteki Sanpunkan`, `Hatsukoiwa Makekaku`, `Sakura`).
-- Reverse translation can be inferred from romaji with reasonable confidence.
+Also trigger reverse retry when:
 
-Store the reverse translation in the cache so subsequent runs short-circuit. If reverse translation is uncertain, flag the listen for review rather than guessing.
+- The artist looks like a well-known Japanese act by English name (`Tokyo Incidents`, `Sheena Ringo`, `Yuki Kajiura`, `SawanoHiroyuki[nZk]`, `YOASOBI`, `Ado`, `Hikaru Utada`, etc.) and the track title is already CJK. Search with `(native_artist, original_CJK_track)`.
+- The track title looks like romanized Japanese (e.g. `Noudouteki Sanpunkan`, `Hatsukoiwa Makekaku`, `Sakura`) and the reverse romaji→native translation can be inferred with reasonable confidence.
+
+Store new reverse translations in the cache so subsequent runs short-circuit. If reverse translation is uncertain, flag the listen for review rather than guessing.
 
 #### 4c. Merge
 
@@ -165,12 +166,33 @@ When a Bach / Mozart / Beethoven / etc. catalog mismatch exists (e.g. listen say
 
 A **katakana-only artist** is one whose core name is pure katakana (transliterating a non-Japanese name). Standard Japanese ensemble / instrument suffixes in kanji — `四重奏団` (quartet), `管弦楽団` (orchestra), `室内管弦楽団` (chamber orchestra), `交響楽団` (symphony orchestra), `合唱団` (choir) — do NOT disqualify it. The core name is still a transliteration.
 
-Verdict rule:
+Verdict rule — **two cases**:
 
-- If the primary search, the simplified-artist retry (Phase 4a), and the CJK-artist fallback all fail to produce **any candidate that would survive the evaluation rules above**, verdict is `delete`.
-- Note: "no usable result" means no evaluation-compatible candidate, NOT just literal zero rows. If candidates exist but every one fails the classical work-identity check (wrong BWV, wrong key, wrong movement, or plainly different artist), that counts as no usable result.
+**Case A: Japan-only obscure release → `delete`**
+
+When all of these hold:
+
+- Katakana-only artist.
+- Primary + simplified-artist retry + CJK-artist fallback + EN→native retry all fail to produce a candidate that survives the evaluation rules.
+- The translated English form of the artist is NOT a mainstream internationally-active artist (see below).
+- AND the recording is plausibly a Japan-exclusive release (anime tie-in single, bonus track, regional edition, world premiere).
 
 Rationale: these are bad scrobbles from Japanese streaming services whose metadata never propagated into MusicBrainz. Keeping them as `skip` re-evaluates the same doomed candidates on every future run.
+
+**Case B: Mainstream Western artist in katakana → `skip`, not `delete`**
+
+A katakana artist name is ALSO how Japanese scrobblers (SmashTunes, Apple Music JP) render mainstream Western artists. These recordings WILL propagate to MB over time — deleting them discards data that would otherwise map on a later run.
+
+Treat as `skip` when the translated English name is a well-known international artist, for example:
+
+- Classical soloists: Alice Sara Ott, Renaud Capuçon, Jan Lisiecki, Alfred Brendel, Arthur Grumiaux, Lang Lang, Herbert von Karajan, Leonard Bernstein.
+- Major orchestras / conductors: Vienna Philharmonic, Berlin Philharmonic, Orchestre de la Suisse Romande, Paavo Järvi, Claudio Abbado.
+- Contemporary / crossover composers: Max Richter, Ludovico Einaudi, Nils Frahm.
+- Rock / pop: The Rolling Stones, Muse, Dream Theater, Helloween.
+
+Heuristic: if you'd be surprised that the artist has no MusicBrainz entry at all, it's Case B (skip). The track isn't in MB *yet*, but the artist obviously is.
+
+**Important**: "no candidate survives evaluation" must actually verify candidates against the track title, not just the artist. LB Labs Typesense returns fuzzy fallback hits — ANY track by the artist whose title vaguely resembles the search — when the exact track isn't indexed. Always check `recording_name` matches the listen's track identity (work + catalog + movement + key), not just that the artist lines up.
 
 ##### Native-script artist (kanji / hiragana)
 
@@ -186,14 +208,18 @@ Artists with mixed katakana + Latin (e.g. `キャロル&チューズデイ(Vo.Na
 
 #### Verdict Categories
 
-| Verdict  | Meaning                                                                                                                                                                                                                            |
-| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `link`   | Confident match: same work, compatible artist, title identifies the same recording.                                                                                                                                                |
-| `review` | Plausible but ambiguous: short title, larger ensemble credit, arrangement differences, partial title overlap.                                                                                                                      |
-| `skip`   | No usable match. Native-Japanese artist with no hit, or non-CJK listen with weak candidates. Leave for future runs.                                                                                                                |
-| `delete` | Bad listen that will never match. Triggers: (1) katakana-only artist with no evaluation-compatible candidate after all retries, (2) CJK-localized track title with no evaluation-compatible candidate after translation + retries. |
+| Verdict  | Meaning                                                                                                                                                                                                                                                      |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `link`   | Confident match: same work, compatible artist, title identifies the same recording.                                                                                                                                                                          |
+| `review` | Plausible but ambiguous: short title, larger ensemble credit, arrangement differences, partial title overlap.                                                                                                                                                |
+| `skip`   | No usable match. Native-Japanese artist with no hit, mainstream Western artist transliterated to katakana whose specific recording isn't in MB yet, or non-CJK listen with weak candidates. Leave for future runs.                                           |
+| `delete` | Bad listen that will never match. Triggers: (1) katakana-only artist with NO MB presence at all (obscure, Japan-only) + no candidate survives evaluation, (2) CJK-localized track title with no evaluation-compatible candidate after translation + retries. |
 
-**Skip vs delete boundary**: the question is *"could a future search reasonably find a match?"* If yes → `skip`. If no (bad scrobble that will never resolve) → `delete`.
+**Skip vs delete boundary**: the question is *"does this artist have MB presence that a future search could find?"* Note: the LB Labs Typesense index returns fuzzy fallback hits — any track by the artist — whenever the exact track isn't indexed. So "candidates exist" is not evidence that the specific recording is in MB. Verify `recording_name` actually matches the listen's track identity (work + catalog + movement + key), not just that the artist lines up.
+
+If the artist name translates to a mainstream international artist (Max Richter, Renaud Capuçon, Alice Sara Ott, Lang Lang, Vienna Philharmonic, …) → **skip**, because future MB syncs will eventually add the specific recording.
+
+If the artist translates to something obscure that has no MB presence at all (niche vocaloid producer, one-off anime composer) → **delete**, because the scrobble will never map.
 
 ### Phase 6: Present for Approval
 
