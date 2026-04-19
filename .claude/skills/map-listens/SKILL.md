@@ -130,6 +130,42 @@ Build the Lucene query with:
   - Distinctive title word for non-classical: `OSCA`, `いとをかし`, `幽霊`.
 - Avoid stuffing too many tokens — MB Lucene treats `AND` strictly, so over-constrained queries return zero. 3–4 tokens is a sweet spot.
 
+##### Title simplification before query
+
+Most listen titles carry decorations that do NOT appear in the MB recording title. Strip them before tokenizing so the `AND`-joined query actually matches:
+
+- **Strip parentheticals**: `(Remastered 2024)`, `(Live)`, `(feat. X)`, `(Arr. ...)`, `(TV Edit)`, `(Extend ver.)`, `(Anime Ver.)`, `[Deluxe]` — these are release metadata, not part of the work title.
+- **Drop after the colon for classical**: `Op. 10: No. 1 in F-Sharp Minor` → keep `Op. 10 No. 1`. The colon-separated tail (movement marker) is often phrased differently in MB (`op. 10 n° 1`, `Op. 10, No. 1`, `Opus 10 No 1`), so narrow by catalog + ordinal and filter in post-check.
+- **Use an ordinal as a second-pass filter, not a search term**: `recording:"No. 1"` is too literal. Keep the opus + work number in ONE clause (`recording:op` `recording:10` `recording:1`) then verify the returned title contains the right movement.
+- **Try the bare catalog alone** when artist + catalog + one distinctive word returns zero — e.g. `artist:"Boris Giltburg" AND recording:Polichinelle` hits even if `Op. 3` never appears in the indexed title.
+
+##### Remaster / re-recording equivalence
+
+Listens tagged `(Remastered 20XX)`, `(2024 Remaster)`, `(Recast 2026)`, or `(XX Edition)` are **acceptable matches** to the original recording MBID when no dedicated MBID exists for the remaster. Examples that mapped this way:
+
+- `妖精帝國 — 春へ (Recast 2026)` → MB `春へ` (2011 original).
+- `妖精帝國 — 月下狂想 (Recast 2026)` → MB `月下狂想` (original).
+- `Dr. Hoffman — Resident Evil - Main Title (Remastered 2024)` → would map to the original main title MBID if present.
+
+Rule: if the only difference between listen and candidate is a remaster/re-recording annotation AND the artist + work + key + movement are otherwise identical, treat as `link`. Prefer a dedicated remaster MBID if MB has one, otherwise map to the original.
+
+##### Lucene quoting pitfalls
+
+- **Accented characters in quoted phrases break the search**: `artist:"Clément Lefebvre"` returns zero, but `artist:Lefebvre` (unquoted) returns the match. ASCII-fold the artist name or drop the quotes when the name contains diacritics.
+- **Don't quote catalog tokens**: `recording:"Op. 10"` is parsed literally and often misses; MB indexes it variably as `op. 10`, `Op. 10`, `Opus 10`. Use bare `recording:op AND recording:10` instead.
+- **Periods and spaces inside quoted phrases** trigger literal matching. Leave catalog numbers unquoted.
+
+##### Japanese track-title variants
+
+For native Japanese tracks where the primary search fails, try all four combinations of artist × title script:
+
+1. Native artist + native title (e.g. `妖精帝國 — 春へ`).
+2. Native artist + EN title (if translated).
+3. EN artist + native title (common for mainstream J-rock indexed with romanized artist but native track).
+4. EN artist + EN title.
+
+MB favors native script for Japan-primary acts (`妖精帝國`, `椎名林檎`, `東京事変`) and romanized for acts with international presence (`YOASOBI`, `Hikaru Utada`).
+
 Score interpretation:
 
 - MB returns a `score` per recording. `score=100` is necessary but **not sufficient** — Lucene treats partial token matches as 100. Always verify the returned `recording.title` actually matches the listen's track identity (work + catalog + key + movement) using the Phase 5 rules.
@@ -161,7 +197,7 @@ When the batch is ≥ 50 items, parallelize: split into chunks of ~100, spawn on
 
 - Same recording, not just overlapping words.
 - Short / generic titles (`Alive`, `Home`, `Love`, `Shine`) need stronger artist + release corroboration.
-- **One-sided annotations** — `(TV Edit)`, `[Deluxe]`, `(Arr. for Piano)`, `(feat. X)`, `(Live)` — are usually noise. Accept if the underlying work matches.
+- **One-sided annotations** — `(TV Edit)`, `[Deluxe]`, `(Arr. for Piano)`, `(feat. X)`, `(Live)`, `(Remastered 2024)`, `(Recast 2026)`, `(Extend ver.)`, `(Anime Ver.)` — are usually noise. Accept if the underlying work matches. See Phase 4c "Remaster / re-recording equivalence" for the remaster rule.
 - **Two-sided conflicts** — e.g. listen `"Orchestral Version"` vs match `"Acoustic"` — indicate different recordings; reject unless release context reconciles.
 
 #### Title Matching — Classical Music (strict)
