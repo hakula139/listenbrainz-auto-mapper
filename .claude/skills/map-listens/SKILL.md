@@ -32,8 +32,8 @@ The cache is bidirectional by convention — add entries in whichever direction 
 ```text
 Phase 1  Fetch unlinked listens
 Phase 2  Translate CJK → EN (primary)
-Phase 3  Primary search (LB Labs)
-Phase 4  Weak-match recovery (EN → native, simplified artist)
+Phase 3  Primary search (LB Labs Typesense)
+Phase 4  Weak-match recovery (4a simplified artist · 4b EN→native · 4c MB direct API)
 Phase 5  Evaluate matches (LLM, parallel when ≥ 50 items)
 Phase 6  Present for approval
 Phase 7  Execute approved mappings + deletions
@@ -109,9 +109,38 @@ Also trigger reverse retry when:
 
 Store new reverse translations in the cache so subsequent runs short-circuit. If reverse translation is uncertain, flag the listen for review rather than guessing.
 
-#### 4c. Merge
+#### 4c. MB direct API fallback (critical for classical and Japanese catalog)
 
-Merge recovered results into the primary result set. Track a `retry_used` flag on recovered items so Phase 5 can weight them accordingly.
+**LB Labs Typesense and the MusicBrainz direct API have very different recall.** Empirical finding from a 500-listen run: dozens of recordings (Jan Lisiecki K.271 movements, Renaud Capuçon BWV 1001, 椎名林檎 いとをかし, Tokyo Incidents O.S.C.A., 和久井沙良 幽霊になっても美しい, …) **do exist in MB** but never surface from LB Labs Typesense. They surface immediately from the MB Lucene index.
+
+For any listen still without a confident match after Phase 3 + 4a + 4b, query MB directly:
+
+```text
+GET https://musicbrainz.org/ws/2/recording/?query=<lucene>&fmt=json&limit=10
+```
+
+Use a `User-Agent` header (`lb-mapper/<version> (<contact>)`) and respect the **1 request / second** rate limit.
+
+Build the Lucene query with:
+
+- `artist:"<name>"` — exact phrase, prefer the translated English / native form that MB indexes under (e.g. `Jan Lisiecki`, not `ヤン・リシエツキ`; `椎名林檎`, not `Sheena Ringo`).
+- 2–4 distinctive `recording:<token>` clauses joined with `AND`. Pick:
+  - Catalog tag + number first: `BWV 1001`, `K. 271`, `Op. 52`, `WoO 31`, `MWV O14`, `D. 550`.
+  - Movement marker if present: `Fuga`, `Rondeau`, `Andantino`.
+  - Distinctive title word for non-classical: `OSCA`, `いとをかし`, `幽霊`.
+- Avoid stuffing too many tokens — MB Lucene treats `AND` strictly, so over-constrained queries return zero. 3–4 tokens is a sweet spot.
+
+Score interpretation:
+
+- MB returns a `score` per recording. `score=100` is necessary but **not sufficient** — Lucene treats partial token matches as 100. Always verify the returned `recording.title` actually matches the listen's track identity (work + catalog + key + movement) using the Phase 5 rules.
+- A genuine match: catalog number aligns exactly, movement marker matches, key matches.
+- A false hit: same artist + same opus number on a *different* opus + different movement (Lucene matched the artist + the integer "26" but `op. 26 no. 3` ≠ `Op. 26 No. 1`).
+
+Skip the MB fallback when the artist is a known katakana-only obscure act (Phase 5 Case A) — MB direct won't have these either.
+
+#### 4d. Merge
+
+Merge recovered results from 4a / 4b / 4c into the primary result set, preserving provenance (`retry_used`, `mb_direct`) so Phase 5 can weight them. MB direct hits should be presented to the evaluator as the *top* candidates because they're far more selective than Typesense fallbacks.
 
 ### Phase 5: Evaluate Matches
 
@@ -287,7 +316,9 @@ For batches ≥ 50 items during Phase 5, parallelize:
 ## Important Notes
 
 - NEVER submit a mapping or delete a listen without explicit user approval.
-- The LB Labs `/recording-search/json` endpoint is the only search backend. It uses Typesense with fuzzy matching and handles classical titles well.
-- Rate limits: the LB API returns `X-RateLimit-Remaining` headers; the Python client sleeps automatically when near the limit. LB Labs has no explicit rate limit; be reasonable.
+- Two search backends are used in parallel:
+  - **LB Labs Typesense** (`/recording-search/json`): fast batch search, fuzzy matching. Good first pass but returns *fallback hits* — any track by the artist whose title vaguely resembles the query — when the exact recording isn't indexed. These look like matches but aren't.
+  - **MusicBrainz Lucene direct** (`musicbrainz.org/ws/2/recording/`): precise field-targeted queries with `artist:"…" AND recording:<token>` clauses. Strict 1 req/s rate limit. Use as Phase 4c fallback when LB Labs misses or returns garbage.
+- Rate limits: LB API returns `X-RateLimit-Remaining` headers; the Python client sleeps automatically when near the limit. LB Labs has no explicit rate limit. MB direct is 1 req/sec — sleep 1.05s between calls.
 - The translation cache grows across runs — early runs are slower, later runs are faster.
 - When in doubt, prefer `skip` over `delete` for non-CJK listens. Deletion is irreversible.
