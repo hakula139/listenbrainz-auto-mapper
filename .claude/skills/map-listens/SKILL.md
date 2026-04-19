@@ -104,10 +104,31 @@ Trigger this retry **proactively** whenever the artist has an EN→native entry 
 
 Also trigger reverse retry when:
 
-- The artist looks like a well-known Japanese act by English name (`Tokyo Incidents`, `Sheena Ringo`, `Yuki Kajiura`, `SawanoHiroyuki[nZk]`, `YOASOBI`, `Ado`, `Hikaru Utada`, etc.) and the track title is already CJK. Search with `(native_artist, original_CJK_track)`.
-- The track title looks like romanized Japanese (e.g. `Noudouteki Sanpunkan`, `Hatsukoiwa Makekaku`, `Sakura`) and the reverse romaji→native translation can be inferred with reasonable confidence.
+- The artist looks like a well-known Japanese act by English name (`Tokyo Incidents`, `Sheena Ringo`, `Yuki Kajiura`, `SawanoHiroyuki[nZk]`, `YOASOBI`, `Ado`, `Hikaru Utada`, `Mika Kobayashi`, `Hiroyuki Sawano`, `Ryosuke Nagaoka` = `浮雲`, `Promise of wizard` = `魔法使いの約束`, etc.) and the track title is already CJK. Search with `(native_artist, original_CJK_track)`.
+- The track title looks like romanized Japanese (e.g. `Noudouteki Sanpunkan`, `Hatsukoiwa Makekaku`, `Atarashii Bunmei Kaika`, `Sakura`) and the reverse romaji→native translation can be inferred with reasonable confidence.
+- The track is formatted as `Romaji Title - English Translation` (Apple Music Japan convention, e.g. `Atarashii Bunmei Kaika - Brand New Civilization`). Split on ` - ` and use the romaji half as the input for romaji→native inference; discard the English translation (it rarely appears in MB).
+
+**The cache is bidirectional — always write BOTH directions.** When you add `X → Y`, also write `Y → X` if it is not yet present. A missed reverse entry caused `Mika Kobayashi — 透明な青` to be skipped on a 500-listen run even though MB had the native-script recording under `小林未郁`.
 
 Store new reverse translations in the cache so subsequent runs short-circuit. If reverse translation is uncertain, flag the listen for review rather than guessing.
+
+#### 4b-ii. Featured-artist rewrap (both directions)
+
+Japanese / anime scrobbles frequently rearrange the "primary" and "featured" artists compared to how MB indexes the recording. There are two directional rewrites worth trying, each as an independent retry query:
+
+- **Listen-primary becomes MB-featured**: listen `PrimaryA — Track (feat. FeatB)` → MB may index as `FeatB feat. PrimaryA — Track` or `MBArtist — Track feat. PrimaryA`. Example: `ペトロールズ — 雨` is indexed in MB as `dropp — 雨 feat. ペトロールズ`; `HIROSHIMA — Rules (feat. 土屋太鳳)` may be indexed under `土屋太鳳`.
+- **Listen-featured becomes MB-primary**: listen `PrimaryA — Track (feat. FeatB)` → MB has `FeatB feat. ...` or just `FeatB — Track`. Example: `Itsuki Amakusa — Stella (feat. Sennzai)` is indexed as `Itsuki feat. Sennzai — Stella`; `削除 — 怪獣になりたい (feat. 初音ミク)` is indexed as `Sakuzyo feat. 初音ミク — 怪獣になりたい`.
+
+Retry strategy: for each `feat. X` appearing in either artist or track fields, run an additional LB Labs search with `X` as the primary artist and the stripped track title. If ANY of these retries returns a candidate whose artist credit mentions the listen's primary artist (as either main or featured), that candidate is a link regardless of how it was surfaced.
+
+#### 4b-iii. Evaluator-side artist containment
+
+Phase 5 artist matching must accept these forms:
+
+- Listen artist appears as `feat. <listen_artist>` inside the candidate's `artist_credit_name` (e.g. listen `ペトロールズ` matches MB credit `dropp — 雨 feat. ペトロールズ`).
+- Listen artist appears as the primary given name only, with surname stripped (e.g. listen `Itsuki Amakusa` matches MB credit `Itsuki feat. Sennzai` because "Itsuki" is the given name). Apply this *only* for Japanese romanized names where the given name is unambiguous; do not apply to Western names.
+- Listen artist and MB credit are EN / native variants of the same person (e.g. `Mika Kobayashi` ≡ `小林未郁`, `Ryosuke Nagaoka` ≡ `浮雲`, `Tokyo Incidents` ≡ `東京事変`, `Promise of wizard` ≡ `魔法使いの約束`). Use the translation cache.
+- Romanization spelling variants (Kunrei-shiki ↔ Hepburn): `Sakujo` ≡ `Sakuzyo`, `si` ≡ `shi`, `tu` ≡ `tsu`, `tyu` ≡ `chu`, etc. Do not reject a candidate on the basis of a single-letter spelling difference that corresponds to a known romanization system swap.
 
 #### 4c. MB direct API fallback (critical for classical and Japanese catalog)
 
