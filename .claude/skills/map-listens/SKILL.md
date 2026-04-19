@@ -63,7 +63,7 @@ For each CJK string:
    - **Mixed-script** where only CJK portions need translation; preserve Latin segments verbatim.
 3. Persist new translations back to the cache.
 
-Delegate bulk translation to Codex MCP when available.
+Delegate bulk translation to Codex MCP when available. **Always instruct Codex to use web search** for any translation that is not a direct one-to-one lookup — especially: romaji → native kanji inference, Apple Music JP `Romaji - English` title splits, discography verification for well-known Japanese acts, and classical work / catalog verification. Training-data recall alone produces plausible-sounding but wrong titles (e.g. guessing `Awakening` → `覚醒` when the actual Tokyo Incidents track is `緑酒`); web lookup against Apple Music JP / MusicBrainz / the artist's official discography page is mandatory for non-trivial cases.
 
 ### Phase 3: Primary Search
 
@@ -102,6 +102,8 @@ When the primary search returned zero results AND the artist field is a multi-ar
 
 Trigger this retry **proactively** whenever the artist has an EN→native entry in the translation cache, without waiting for the primary search to fail. The primary search and reverse-direction search run as siblings; whichever yields a clean match wins. MB credits for Japanese acts are often indexed under native script only, so a Latin-form primary search may return nothing *or* return Typesense fallback hits (any track by the artist) that look like matches but aren't.
 
+**This retry MUST run orchestrator-side before Phase 5 evaluation.** The `search_batch.py` script only does primary + one CJK-artist fallback — it does not consult the translation cache for reverse lookups. Evaluators cannot rescue these items on their own, because the evaluator only sees the fallback candidates; once all top hits are wrong-track Typesense fallbacks, the only correct verdict is `skip`. On a 500-listen run this gap caused 43 links (Tokyo Incidents, Sheena Ringo, SawanoHiroyuki[nZk], EGOIST, Mika Nakashima) to be mis-skipped until the orchestrator manually re-queried with native forms. Treat this as a Phase 3.5 step: after the primary search, scan every `skip`-eligible item whose artist appears in the cache as `EN → native` or is in the well-known-artist list below, and re-query `(native_artist, inferred_native_title)` before handing to evaluators.
+
 Also trigger reverse retry when:
 
 - The artist looks like a well-known Japanese act by English name (`Tokyo Incidents`, `Sheena Ringo`, `Yuki Kajiura`, `SawanoHiroyuki[nZk]`, `YOASOBI`, `Ado`, `Hikaru Utada`, `Mika Kobayashi`, `Hiroyuki Sawano`, `Ryosuke Nagaoka` = `浮雲`, `Promise of wizard` = `魔法使いの約束`, etc.) and the track title is already CJK. Search with `(native_artist, original_CJK_track)`.
@@ -110,7 +112,7 @@ Also trigger reverse retry when:
 
 **The cache is bidirectional — always write BOTH directions.** When you add `X → Y`, also write `Y → X` if it is not yet present. A missed reverse entry caused `Mika Kobayashi — 透明な青` to be skipped on a 500-listen run even though MB had the native-script recording under `小林未郁`.
 
-Store new reverse translations in the cache so subsequent runs short-circuit. If reverse translation is uncertain, flag the listen for review rather than guessing.
+Store new reverse translations in the cache so subsequent runs short-circuit. If reverse translation is uncertain, **delegate to Codex MCP with an explicit instruction to use web search** (Apple Music JP, MusicBrainz, the artist's official discography page) to verify the native title — do NOT rely on training-data recall alone. Guessing produces plausible-sounding but wrong titles (e.g. training data suggested `Awakening` → `覚醒` for Tokyo Incidents, but the actual native track is `緑酒`). Flag for review only when web lookup fails to confirm.
 
 #### 4b-ii. Featured-artist rewrap (both directions)
 
@@ -307,6 +309,15 @@ If the artist name translates to a mainstream international artist (Max Richter,
 
 If the artist translates to something obscure that has no MB presence at all (niche vocaloid producer, one-off anime composer) → **delete**, because the scrobble will never map.
 
+##### User deletion policy — pre-Phase-7 filter
+
+Before pushing deletions, split candidates into two buckets:
+
+- **Safe to delete** — the listen's artist OR title contains katakana AND the title is clearly a classical work (has a catalog marker: `BWV`, `K./KV`, `Op.`, `D.`, `S.`, `Hob.`, `WoO`, `MWV`, `HWV`, `RV`, `TWV`, `Wq`, `Sz.`, `L.`; OR a standard classical form word: `Sonata`, `Concerto`, `Symphony`, `Prelude`, `Fugue`, `Nocturne`, `Etude`, `Variations`, `Chaconne`, `Gnossienne`, `Partita`, `Suite`, `Quartet`, `Quintet`, `Waltz`, `Scherzo`, `Mazurka`; OR a known composer-specific localized title such as `スラヴ行進曲` = Slavonic March, `イギリス組曲` = English Suite, `朱色の塔` = Torre Bermeja / Albéniz Op. 92 No. 12). These are the "Japan-only catalog entry for an obscure classical soloist" cases where MB genuinely has no recording and waiting won't help.
+- **Pend (demote delete → skip)** — everything else. Non-classical katakana artists (ambient, indie, anime-OST piano covers, contemporary composers like `ジョン・レネハン` playing original pieces, `ユリウス・アザル` playing `In meinem Garten`, Chinese-only catalog entries like `变奏的梦想`), Hatsune Miku / VTuber / doujin scrobbles. MB may add these on future syncs; don't destroy the listen.
+
+The bucket split must happen **before** presenting the deletion list to the user. Be conservative: when in doubt, demote to skip. A conservative regex for catalog markers is insufficient — `KV.452` (no space), `Hob. XVI:34` (Roman), and composer-name-bearing localized titles all need explicit handling. When unsure whether a piece is classical, bias toward pend.
+
 ### Phase 6: Present for Approval
 
 Group by verdict. Never execute without explicit user approval.
@@ -369,6 +380,14 @@ For batches ≥ 50 items during Phase 5, parallelize:
 3. Spawn one evaluator per chunk — Codex MCP session preferred, Claude Code subagent as fallback.
 4. Each evaluator writes a verdict JSON `[{idx, verdict, recording_mbid, reason}, ...]`.
 5. Merge by `idx` after all complete.
+
+### Evaluator calibration (important)
+
+Parallel evaluators **vary by chunk composition**. On the same prompt, two chunks of 100 items produced 0 and 4 links respectively — not because one was smarter, but because chunks with more well-known acts and cleaner candidates yield more links. Don't panic when one chunk returns 0 — inspect the skip sample. If most skips match the "Typesense fallback; title doesn't match" pattern AND the artist is a well-known Japanese act, that's a Phase 3.5 gap (missing reverse retry), not an evaluator bug.
+
+After all chunks return, always run a **sanity sweep** over the skip list: group skips by artist, count, and flag any artist appearing 3+ times whose name is in the well-known-Japanese-acts list (Tokyo Incidents, Sheena Ringo, SawanoHiroyuki[nZk], EGOIST, Mika Nakashima, May'n, halca, Denims, Ichiyo Izawa, Yoko Kanno, etc.). These are near-certain reverse-retry candidates — delegating them to Codex with web-search access typically rescues 30-50% as links. Budget ~5-10 minutes extra per 500-listen run for this sanity sweep; it's the single highest-yield recovery step.
+
+Also note: evaluators that omit `recording_mbid` on non-link entries (`{idx, verdict, reason}` only) are valid and should be handled by downstream code without crashing. Normalize before merging.
 
 ## Important Notes
 
