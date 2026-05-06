@@ -210,7 +210,7 @@ When the batch is ≥ 50 items, parallelize: split into chunks of ~100, spawn on
 #### Artist Verification
 
 - `artist_credit_name` must plausibly refer to the same artist(s) as the listen.
-- Separator variations (`&`, `,`, `feat.`, `and`) are equivalent.
+- Separator variations (`&`, `,`, `feat.`, `and`, `vs`, `vs.`) are equivalent — Japanese hardcore / dōjin scrobbles often render `vs` as `&` (e.g. `REDALiCE & USAO` ≡ MB `REDALiCE vs USAO`).
 - Minor spelling / accent differences are OK (e.g. `Capuccelli` ≈ `Capucelli`).
 - **Substring false positives are mismatches**: `Foster` ≠ `Neil Foster` ≠ `Kendra Foster`.
 - CJK artists may appear directly in MB credits as aliases — check both the original and the translation against the credit.
@@ -254,33 +254,22 @@ When a Bach / Mozart / Beethoven / etc. catalog mismatch exists (e.g. listen say
 
 A **katakana-only artist** is one whose core name is pure katakana (transliterating a non-Japanese name). Standard Japanese ensemble / instrument suffixes in kanji — `四重奏団` (quartet), `管弦楽団` (orchestra), `室内管弦楽団` (chamber orchestra), `交響楽団` (symphony orchestra), `合唱団` (choir) — do NOT disqualify it. The core name is still a transliteration.
 
-Verdict rule — **two cases**:
+Verdict rule — **two cases**, distinguished by whether the track is a classical work (catalog marker / form word):
 
-**Case A: Japan-only obscure release → `delete`**
+**Case A: katakana artist + classical track → `delete`** when all retries (primary + 4a + 4b + MB direct) fail to produce a candidate matching the work identity (catalog + movement + key).
 
-When all of these hold:
+This applies even to mainstream classical artists (Lang Lang, Mitsuko Uchida, Vienna Philharmonic, Jan Lisiecki, Arthur Grumiaux). Empirical observation: Apple Music JP / SmashTunes album-track scrobbles for any classical artist do not propagate to MusicBrainz on later syncs — the artist exists in MB, but this *specific recording* never appears. Keeping these as `skip` re-evaluates doomed candidates on every future run.
 
-- Katakana-only artist.
-- Primary + simplified-artist retry + CJK-artist fallback + EN→native retry all fail to produce a candidate that survives the evaluation rules.
-- The translated English form of the artist is NOT a mainstream internationally-active artist (see below).
-- AND the recording is plausibly a Japan-exclusive release (anime tie-in single, bonus track, regional edition, world premiere).
+**Case B: katakana artist + non-classical track → `skip` by default**; promote to `delete` only when the track is verified as a classical arrangement / transcription with a non-classical-looking title.
 
-Rationale: these are bad scrobbles from Japanese streaming services whose metadata never propagated into MusicBrainz. Keeping them as `skip` re-evaluates the same doomed candidates on every future run.
+Default `skip` covers genuine non-classical content: J-pop, anime / game-OST piano covers (`Lang Lang — To Zanarkand`, `Stephen Hough — Remember Me [From "Coco"]`), contemporary originals (`Alice Sara Ott — Melodia`, `Lara Downes — Wondrous Free`), pop / indie. These do propagate to MB over time.
 
-**Case B: Mainstream Western artist in katakana → `skip`, not `delete`**
+Promote to `delete` when ALL hold:
 
-A katakana artist name is ALSO how Japanese scrobblers (SmashTunes, Apple Music JP) render mainstream Western artists. These recordings WILL propagate to MB over time — deleting them discards data that would otherwise map on a later run.
+- Explicit arrangement marker — `(Arr. for ...)`, `(Transcr. for ...)`, `(After [Composer]'s [Work])` — OR web search confirms a classical work behind a colloquial title (e.g. `Vanessa Wagner — 2 Tone-Pictures: II. The Seal-Woman's Sea-Joy` is Bax; `ハレム — Gymnopédie (After Satie's Gymnopédie No. 1)` is Satie).
+- Re-query MB Lucene with the verified composer + work title also returns no match.
 
-Treat as `skip` when the translated English name is a well-known international artist, for example:
-
-- Classical soloists: Alice Sara Ott, Renaud Capuçon, Jan Lisiecki, Alfred Brendel, Arthur Grumiaux, Lang Lang, Herbert von Karajan, Leonard Bernstein.
-- Major orchestras / conductors: Vienna Philharmonic, Berlin Philharmonic, Orchestre de la Suisse Romande, Paavo Järvi, Claudio Abbado.
-- Contemporary / crossover composers: Max Richter, Ludovico Einaudi, Nils Frahm.
-- Rock / pop: The Rolling Stones, Muse, Dream Theater, Helloween.
-
-Heuristic: if you'd be surprised that the artist has no MusicBrainz entry at all, it's Case B (skip). The track isn't in MB *yet*, but the artist obviously is.
-
-**Important**: "no candidate survives evaluation" must actually verify candidates against the track title, not just the artist. LB Labs Typesense returns fuzzy fallback hits — ANY track by the artist whose title vaguely resembles the search — when the exact track isn't indexed. Always check `recording_name` matches the listen's track identity (work + catalog + movement + key), not just that the artist lines up.
+**Important**: "no candidate survives evaluation" must verify candidates against the track title, not just the artist. LB Labs Typesense returns fuzzy fallback hits — ANY track by the artist whose title vaguely resembles the search. Always check `recording_name` matches the listen's track identity (work + catalog + movement + key).
 
 ##### Native-script artist (kanji / hiragana)
 
@@ -296,27 +285,34 @@ Artists with mixed katakana + Latin (e.g. `キャロル&チューズデイ(Vo.Na
 
 #### Verdict Categories
 
-| Verdict  | Meaning                                                                                                                                                                                                                                                      |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `link`   | Confident match: same work, compatible artist, title identifies the same recording.                                                                                                                                                                          |
-| `review` | Plausible but ambiguous: short title, larger ensemble credit, arrangement differences, partial title overlap.                                                                                                                                                |
-| `skip`   | No usable match. Native-Japanese artist with no hit, mainstream Western artist transliterated to katakana whose specific recording isn't in MB yet, or non-CJK listen with weak candidates. Leave for future runs.                                           |
-| `delete` | Bad listen that will never match. Triggers: (1) katakana-only artist with NO MB presence at all (obscure, Japan-only) + no candidate survives evaluation, (2) CJK-localized track title with no evaluation-compatible candidate after translation + retries. |
+| Verdict  | Meaning                                                                                                                                                                                                                                                  |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `link`   | Confident match: same work, compatible artist, title identifies the same recording.                                                                                                                                                                      |
+| `review` | Plausible but ambiguous: short title, larger ensemble credit, arrangement differences, partial title overlap.                                                                                                                                            |
+| `skip`   | No usable match — but the *recording* may still propagate to MB on a future sync. Native-script Japanese artists, non-classical katakana scrobbles, non-CJK listens with weak candidates. Leave for future runs.                                         |
+| `delete` | The specific recording will not propagate. Triggers: (1) Case A — katakana artist + classical track + no surviving candidate; (2) Case B — katakana artist + verified classical arrangement + no MB match; (3) CJK-localized classical title + no match. |
 
-**Skip vs delete boundary**: the question is *"does this artist have MB presence that a future search could find?"* Note: the LB Labs Typesense index returns fuzzy fallback hits — any track by the artist — whenever the exact track isn't indexed. So "candidates exist" is not evidence that the specific recording is in MB. Verify `recording_name` actually matches the listen's track identity (work + catalog + movement + key), not just that the artist lines up.
+**Skip vs delete boundary**: the question is *"will this specific recording propagate to MB on a future sync?"* — not "does the artist have MB presence?". A Lang Lang Apple-Music-JP exclusive piano arrangement and a Mitsuko Uchida regional album track both have famous artists with rich MB catalogs but the specific recording never appears. The mainstream-artist heuristic protects only non-classical tracks (Case B default).
 
-If the artist name translates to a mainstream international artist (Max Richter, Renaud Capuçon, Alice Sara Ott, Lang Lang, Vienna Philharmonic, …) → **skip**, because future MB syncs will eventually add the specific recording.
+##### Reconciliation pass — before Phase 6
 
-If the artist translates to something obscure that has no MB presence at all (niche vocaloid producer, one-off anime composer) → **delete**, because the scrobble will never map.
+Phase 5 evaluators (parallel chunks) are systematically biased toward `skip` and miss most Case A / Case B `delete` candidates. The orchestrator owns the final delete / skip boundary by running a reconciliation pass over all current `skip` and `delete` verdicts. **This pass is mandatory** — without it, Phase 5 miscalibration leaks into Phase 6.
 
-##### User deletion policy — pre-Phase-7 filter
+**Promote `skip` → `delete`** when the listen meets Case A criteria:
 
-Before pushing deletions, split candidates into two buckets:
+- Listen's artist OR title contains katakana, OR the track title is itself CJK-localized classical metadata.
+- Track is clearly classical: catalog marker (`BWV`, `K./KV`, `Op.`, `D.`, `S.`, `Hob.`, `WoO`, `MWV`, `HWV`, `RV`, `TWV`, `Wq`, `Sz.`, `L.`, `FP`, `H.`, `M.`, `CD`); OR form word (`Sonata`, `Concerto`, `Symphony`, `Prelude`, `Fugue`, `Nocturne`, `Étude`, `Variations`, `Chaconne`, `Partita`, `Suite`, `Quartet`, `Quintet`, `Waltz`, `Scherzo`, `Mazurka`, `Ballade`, `Impromptu`, `Fantaisie`, `Fantasien`, `Intermezzo`, `Capriccio`, `Toccata`, `Rondo`, `Minuet`, `Polonaise`, `Cantata`, `Romance`, `Barcarolle`, `Kinderszenen`, `Davidsbündlertänze`, `Stimmungsbilder`, `Bergamasque`, `Träumerei`, `Tombeau`); OR composer-specific localized title (`スラヴ行進曲` = Slavonic March, `朱色の塔` = Torre Bermeja).
+- No surviving candidate matches the work identity — only Typesense fuzzy fallbacks.
 
-- **Safe to delete** — the listen's artist OR title contains katakana AND the title is clearly a classical work (has a catalog marker: `BWV`, `K./KV`, `Op.`, `D.`, `S.`, `Hob.`, `WoO`, `MWV`, `HWV`, `RV`, `TWV`, `Wq`, `Sz.`, `L.`; OR a standard classical form word: `Sonata`, `Concerto`, `Symphony`, `Prelude`, `Fugue`, `Nocturne`, `Etude`, `Variations`, `Chaconne`, `Gnossienne`, `Partita`, `Suite`, `Quartet`, `Quintet`, `Waltz`, `Scherzo`, `Mazurka`; OR a known composer-specific localized title such as `スラヴ行進曲` = Slavonic March, `イギリス組曲` = English Suite, `朱色の塔` = Torre Bermeja / Albéniz Op. 92 No. 12). These are the "Japan-only catalog entry for an obscure classical soloist" cases where MB genuinely has no recording and waiting won't help.
-- **Pend (demote delete → skip)** — everything else. Non-classical katakana artists (ambient, indie, anime-OST piano covers, contemporary composers like `ジョン・レネハン` playing original pieces, `ユリウス・アザル` playing `In meinem Garten`, Chinese-only catalog entries like `变奏的梦想`), Hatsune Miku / VTuber / doujin scrobbles. MB may add these on future syncs; don't destroy the listen.
+For Case B (katakana + non-classical title), delegate per-item web verification to Codex with `Use web search` instructed explicitly. Classify each as classical / non-classical; for classical items, re-query MB Lucene with the canonical composer + work. Promote to `delete` only when the work is verified-classical AND the MB re-query also fails.
 
-The bucket split must happen **before** presenting the deletion list to the user. Be conservative: when in doubt, demote to skip. A conservative regex for catalog markers is insufficient — `KV.452` (no space), `Hob. XVI:34` (Roman), and composer-name-bearing localized titles all need explicit handling. When unsure whether a piece is classical, bias toward pend.
+**Demote `delete` → `skip`** when the artist has no CJK at all (Latin-only name) — deletion is too aggressive without script evidence of Apple Music JP origin.
+
+**Keep as `skip`** native-script (kanji / hiragana) artists like `角野隼斗`, `藤田真央`, `三浦謙司` — their specific recordings may still propagate.
+
+The reconciliation pass must run **before** Phase 6 presentation. Be conservative on demotion, aggressive on Case A promotion: the regex match is the load-bearing safeguard, so add new catalog markers and form words to it as you discover them.
+
+**Past-run feedback (2026-05-07, 500-listen run)**: without this pass, the run produced 0 deletes despite ~88 katakana-classical items mechanically meeting Case A. Evaluator chunks 1 / 2 marked 3 / 11 deletes; chunks 3 / 4 / 5 marked 0 each — the variance is structural, not stochastic. The promotion pass recovered all 88. Bucket B (87 items) yielded 7 additional deletes after Codex web verification.
 
 ### Phase 6: Present for Approval
 
