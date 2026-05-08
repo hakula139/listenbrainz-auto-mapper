@@ -14,383 +14,290 @@ Map unlinked ListenBrainz listens to MusicBrainz recordings for the user specifi
 
 ## Setup
 
-The project lives at the repo root. The `.env` file contains `LB_TOKEN` and `LB_USER`. Python code runs via `uv run` from the repo root. CLI helpers are in the `lb_mapper.cli` package:
+Code runs via `uv run` from the repo root. CLI helpers in `lb_mapper.cli`:
 
-- `lb_mapper.cli.fetch_listens` — fetch recent listens, output unlinked as JSON
-- `lb_mapper.cli.search_batch` — batch search LB Labs for recording matches
-- `lb_mapper.cli.execute` — submit approved mappings and delete approved listens
+- `fetch_listens` — fetch recent listens, output unlinked as JSON
+- `search_batch` — batch search LB Labs for recording matches
+- `execute` — submit approved mappings and delete approved listens
 
-The translation cache at `~/.cache/lb-mapper/translations.json` is a flat JSON object that stores alias pairs in BOTH directions:
-
-- **JA → EN** (primary use): scrobbled CJK artist / title → English equivalent, e.g. `"椎名林檎" → "Sheena Ringo"`, `"ゴルトベルク変奏曲 BWV 988: アリア" → "Goldberg Variations, BWV 988: Aria"`
-- **EN → native** (fallback): romanized Japanese title or English band name → native-script equivalent, e.g. `"Noudouteki Sanpunkan - 3 Min." → "能動的三分間"`, `"Tokyo Incidents" → "東京事変"`
-
-The cache is bidirectional by convention — add entries in whichever direction is useful. Lookup is a plain `cache.get(key)` in either direction.
+The translation cache at `~/.cache/lb-mapper/translations.json` is a flat JSON object keyed by either direction. Always write **both** directions when you learn an alias pair: `cache["椎名林檎"] = "Sheena Ringo"` and `cache["Sheena Ringo"] = "椎名林檎"`. Lookup is `cache.get(key)`. The cache grows across runs; later runs are faster.
 
 ## Pipeline
 
 ```text
 Phase 1  Fetch unlinked listens
-Phase 2  Translate CJK → EN (primary)
-Phase 3  Primary search (LB Labs Typesense)
-Phase 4  Weak-match recovery (4a simplified artist · 4b EN→native · 4c MB direct API)
-Phase 5  Evaluate matches (LLM, parallel when ≥ 50 items)
+Phase 2  Translate CJK strings (both directions)
+Phase 3  Search (primary + every recovery angle)
+Phase 4  Evaluate matches
+Phase 5  Reconcile verdicts (Case A/B + skip-recovery sweep)
 Phase 6  Present for approval
-Phase 7  Execute approved mappings + deletions
+Phase 7  Execute approved actions
 ```
 
-All retry / recovery strategies live in the orchestration layer (this skill). The Python `search_batch` script is intentionally simple — it runs one primary query per item with a single CJK-artist fallback. Any further recovery is the orchestrator's job.
+All retry / recovery logic lives in the orchestration layer. The Python `search_batch` script is intentionally simple — it runs one primary query per item with one CJK-artist fallback. Anything beyond is the orchestrator's job.
 
-### Phase 1: Fetch
+## Phase 1: Fetch
 
 ```bash
 uv run python -m lb_mapper.cli.fetch_listens COUNT
 ```
 
-Paginates history until `COUNT` **unlinked** listens are collected. Outputs JSON on stdout: `{total, linked, unlinked: [...]}`. Each listen has `listened_at`, `recording_msid`, `artist`, `track`, `release`. Report totals to the user.
+Paginates history until `COUNT` **unlinked** listens are collected. Outputs `{total, linked, unlinked: [...]}` on stdout. Each listen has `listened_at`, `recording_msid`, `artist`, `track`, `release`. Report totals to the user.
 
-### Phase 2: Translate CJK → EN
+## Phase 2: Translate
 
-Load the cache. For each unlinked listen, use `contains_cjk()` from `lb_mapper.lb_search` to detect CJK / Hangul / Kana in both `artist` and `track`.
+Load the cache. Use `contains_cjk()` from `lb_mapper.lb_search` to detect CJK / Hangul / Kana in `artist` and `track`.
 
-For each CJK string:
+For each CJK string, look up the cache; for misses, translate now. Strings fall into one of:
 
-1. Cache hit → use cached translation.
-2. Cache miss → translate now. The string may be:
-   - A katakana **transliteration** of a Western name (e.g. `アルフレッド・ブレンデル` → `Alfred Brendel`).
-   - A **native** kanji / hiragana name (e.g. `椎名林檎` → `Sheena Ringo`).
-   - A **localized** classical title (e.g. `ピアノ協奏曲 第3番 ニ短調 作品30` → `Piano Concerto No. 3 in D minor, Op. 30`).
-   - **Mixed-script** where only CJK portions need translation; preserve Latin segments verbatim.
-3. Persist new translations back to the cache.
+- **Katakana transliteration** of a Western name → recover the original (`アルフレッド・ブレンデル` → `Alfred Brendel`).
+- **Native** kanji / hiragana name → canonical romanization.
+- **Localized classical title** → standard English form preserving the catalog tag.
+- **Mixed-script** → translate only the CJK portions; preserve Latin segments verbatim.
 
-Delegate bulk translation to Codex MCP when available. **Always instruct Codex to use web search** for any translation that is not a direct one-to-one lookup — especially: romaji → native kanji inference, Apple Music JP `Romaji - English` title splits, discography verification for well-known Japanese acts, and classical work / catalog verification. Training-data recall alone produces plausible-sounding but wrong titles (e.g. guessing `Awakening` → `覚醒` when the actual Tokyo Incidents track is `緑酒`); web lookup against Apple Music JP / MusicBrainz / the artist's official discography page is mandatory for non-trivial cases.
+Persist new entries to the cache in both directions when applicable.
 
-### Phase 3: Primary Search
+**Delegate bulk translation to Codex MCP and instruct it to use web search.** Training-data recall produces plausible-sounding but wrong titles. Always verify via Apple Music JP / MusicBrainz / the artist's official discography page for: romaji ↔ native kanji inference, Apple Music JP `Romaji - English` title splits, well-known JP discography lookups, and classical work / catalog verification.
 
-Build one query per listen:
+## Phase 3: Search
 
-```json
-{
-  "artist": "<translated if CJK else original>",
-  "track":  "<translated if CJK else original>",
-  "release": "<original release or empty>",
-  "original_artist": "<original CJK artist, else empty>"
-}
-```
+For every listen, gather candidates by trying **all the angles below** and merging the results. Don't stop after the first hit — fuzzy fallbacks look like matches but often aren't, so a real match found by a later angle wins.
 
-Batch in chunks of ~50 and pipe to stdin:
+### 3a. Primary LB Labs query
 
 ```bash
 echo '$JSON_ARRAY' | uv run python -m lb_mapper.cli.search_batch
 ```
 
-The script runs one search per item against LB Labs (Typesense). If `original_artist` is CJK and the translated search returns zero results, it retries once with the original CJK artist. It returns `{...input, results: [...]}` per item; each result has `recording_mbid`, `recording_name`, `release_name`, `release_mbid`, `artist_credit_name`, `artist_credit_id`.
+Per item: `{artist, track, release, original_artist}` where `artist` / `track` are translated forms and `original_artist` is the original CJK if applicable. The script does one Typesense search per item plus one CJK-artist fallback. Returns `{...input, results: [...]}` per item.
 
-### Phase 4: Weak-Match Recovery
+### 3b. Reverse-direction (EN → native) retry
 
-Before evaluation, attempt one more search for items that are likely recoverable:
+Run **proactively** as a sibling to 3a. MB credits for Japanese acts are often indexed under native script only, so a Latin-form primary search may return nothing or — worse — return Typesense fallback hits that look like matches.
 
-#### 4a. Simplified-artist retry
+Trigger when:
 
-When the primary search returned zero results AND the artist field is a multi-artist credit (contains `&`, `,`, or `feat.`), re-search with just the first artist. This rescues classical recordings whose Typesense index entry doesn't include the full "soloist, orchestra & conductor" string.
+- The artist has an EN → native entry in the cache.
+- The artist is a well-known JP act by English name (`Tokyo Incidents`, `Sheena Ringo`, `Maaya Sakamoto`, `Yoko Kanno`, `Mitsuki Takahata`, `Sakuzyo` / `Sakujo`, `Mika Kobayashi`, `Ryosuke Nagaoka`, `Ceui`, `SawanoHiroyuki[nZk]`, `Yuki Kajiura`, `YOASOBI`, `Ado`, `Hikaru Utada`, `Hiroyuki Sawano`, `Promise of wizard`).
+- Track title looks like romanized Japanese — infer the native kanji via web search.
+- Track is formatted `Romaji - English Translation` (Apple Music JP convention). Split on ` - `, use the romaji half for inference, discard the English (it rarely appears in MB).
+
+Search with `(native_artist, native_track)`. If reverse translation is uncertain, delegate to Codex MCP with explicit web-search instruction. Persist new aliases in both directions.
+
+### 3c. Simplified-artist retry
+
+When the artist field is a multi-artist credit (`&`, `,`, `feat.`) and the primary returned zero or only fuzzy hits, re-search with just the first artist. This rescues classical recordings whose Typesense entry doesn't include the full "soloist, orchestra & conductor" string.
 
 ```python
-# first artist = re.split(r'\s*[,&]\s*|\s+feat\.\s+', artist)[0].strip()
+first = re.split(r'\s*[,&]\s*|\s+feat\.\s+', artist)[0].strip()
 ```
 
-#### 4b. Reverse-direction (EN → native) retry
+### 3d. Featured-artist rewrap
 
-Trigger this retry **proactively** whenever the artist has an EN→native entry in the translation cache, without waiting for the primary search to fail. The primary search and reverse-direction search run as siblings; whichever yields a clean match wins. MB credits for Japanese acts are often indexed under native script only, so a Latin-form primary search may return nothing *or* return Typesense fallback hits (any track by the artist) that look like matches but aren't.
+JP / anime scrobbles frequently shuffle primary vs featured artists relative to MB. For each `feat. X` in either field, run an LB Labs query with `X` as primary artist + the stripped track. Two patterns:
 
-**This retry MUST run orchestrator-side before Phase 5 evaluation.** The `search_batch.py` script only does primary + one CJK-artist fallback — it does not consult the translation cache for reverse lookups. Evaluators cannot rescue these items on their own, because the evaluator only sees the fallback candidates; once all top hits are wrong-track Typesense fallbacks, the only correct verdict is `skip`. On a 500-listen run this gap caused 43 links (Tokyo Incidents, Sheena Ringo, SawanoHiroyuki[nZk], EGOIST, Mika Nakashima) to be mis-skipped until the orchestrator manually re-queried with native forms. Treat this as a Phase 3.5 step: after the primary search, scan every `skip`-eligible item whose artist appears in the cache as `EN → native` or is in the well-known-artist list below, and re-query `(native_artist, inferred_native_title)` before handing to evaluators.
+- **Listen primary becomes MB featured**: listen `ペトロールズ — 雨` is indexed in MB as `dropp — 雨 feat. ペトロールズ`.
+- **Listen featured becomes MB primary**: listen `削除 — 怪獣になりたい (feat. 初音ミク)` is indexed as `Sakuzyo feat. 初音ミク — 怪獣になりたい`.
 
-Also trigger reverse retry when:
+Any retry whose `artist_credit_name` mentions the listen's primary artist (as either main or featured) is a valid candidate.
 
-- The artist looks like a well-known Japanese act by English name (`Tokyo Incidents`, `Sheena Ringo`, `Yuki Kajiura`, `SawanoHiroyuki[nZk]`, `YOASOBI`, `Ado`, `Hikaru Utada`, `Mika Kobayashi`, `Hiroyuki Sawano`, `Ryosuke Nagaoka` = `浮雲`, `Promise of wizard` = `魔法使いの約束`, etc.) and the track title is already CJK. Search with `(native_artist, original_CJK_track)`.
-- The track title looks like romanized Japanese (e.g. `Noudouteki Sanpunkan`, `Hatsukoiwa Makekaku`, `Atarashii Bunmei Kaika`, `Sakura`) and the reverse romaji→native translation can be inferred with reasonable confidence.
-- The track is formatted as `Romaji Title - English Translation` (Apple Music Japan convention, e.g. `Atarashii Bunmei Kaika - Brand New Civilization`). Split on ` - ` and use the romaji half as the input for romaji→native inference; discard the English translation (it rarely appears in MB).
+### 3e. MB direct API
 
-**The cache is bidirectional — always write BOTH directions.** When you add `X → Y`, also write `Y → X` if it is not yet present. A missed reverse entry caused `Mika Kobayashi — 透明な青` to be skipped on a 500-listen run even though MB had the native-script recording under `小林未郁`.
-
-Store new reverse translations in the cache so subsequent runs short-circuit. If reverse translation is uncertain, **delegate to Codex MCP with an explicit instruction to use web search** (Apple Music JP, MusicBrainz, the artist's official discography page) to verify the native title — do NOT rely on training-data recall alone. Guessing produces plausible-sounding but wrong titles (e.g. training data suggested `Awakening` → `覚醒` for Tokyo Incidents, but the actual native track is `緑酒`). Flag for review only when web lookup fails to confirm.
-
-#### 4b-ii. Featured-artist rewrap (both directions)
-
-Japanese / anime scrobbles frequently rearrange the "primary" and "featured" artists compared to how MB indexes the recording. There are two directional rewrites worth trying, each as an independent retry query:
-
-- **Listen-primary becomes MB-featured**: listen `PrimaryA — Track (feat. FeatB)` → MB may index as `FeatB feat. PrimaryA — Track` or `MBArtist — Track feat. PrimaryA`. Example: `ペトロールズ — 雨` is indexed in MB as `dropp — 雨 feat. ペトロールズ`; `HIROSHIMA — Rules (feat. 土屋太鳳)` may be indexed under `土屋太鳳`.
-- **Listen-featured becomes MB-primary**: listen `PrimaryA — Track (feat. FeatB)` → MB has `FeatB feat. ...` or just `FeatB — Track`. Example: `Itsuki Amakusa — Stella (feat. Sennzai)` is indexed as `Itsuki feat. Sennzai — Stella`; `削除 — 怪獣になりたい (feat. 初音ミク)` is indexed as `Sakuzyo feat. 初音ミク — 怪獣になりたい`.
-
-Retry strategy: for each `feat. X` appearing in either artist or track fields, run an additional LB Labs search with `X` as the primary artist and the stripped track title. If ANY of these retries returns a candidate whose artist credit mentions the listen's primary artist (as either main or featured), that candidate is a link regardless of how it was surfaced.
-
-#### 4b-iii. Evaluator-side artist containment
-
-Phase 5 artist matching must accept these forms:
-
-- Listen artist appears as `feat. <listen_artist>` inside the candidate's `artist_credit_name` (e.g. listen `ペトロールズ` matches MB credit `dropp — 雨 feat. ペトロールズ`).
-- Listen artist appears as the primary given name only, with surname stripped (e.g. listen `Itsuki Amakusa` matches MB credit `Itsuki feat. Sennzai` because "Itsuki" is the given name). Apply this *only* for Japanese romanized names where the given name is unambiguous; do not apply to Western names.
-- Listen artist and MB credit are EN / native variants of the same person (e.g. `Mika Kobayashi` ≡ `小林未郁`, `Ryosuke Nagaoka` ≡ `浮雲`, `Tokyo Incidents` ≡ `東京事変`, `Promise of wizard` ≡ `魔法使いの約束`). Use the translation cache.
-- Romanization spelling variants (Kunrei-shiki ↔ Hepburn): `Sakujo` ≡ `Sakuzyo`, `si` ≡ `shi`, `tu` ≡ `tsu`, `tyu` ≡ `chu`, etc. Do not reject a candidate on the basis of a single-letter spelling difference that corresponds to a known romanization system swap.
-
-#### 4c. MB direct API fallback (critical for classical and Japanese catalog)
-
-**LB Labs Typesense and the MusicBrainz direct API have very different recall.** Empirical finding from a 500-listen run: dozens of recordings (Jan Lisiecki K.271 movements, Renaud Capuçon BWV 1001, 椎名林檎 いとをかし, Tokyo Incidents O.S.C.A., 和久井沙良 幽霊になっても美しい, …) **do exist in MB** but never surface from LB Labs Typesense. They surface immediately from the MB Lucene index.
-
-For any listen still without a confident match after Phase 3 + 4a + 4b, query MB directly:
+When 3a–3d still leave an item without a confident candidate (zero hits, or only fuzzy fallbacks where `recording_name` doesn't match the listen's track identity), query MB Lucene directly:
 
 ```text
 GET https://musicbrainz.org/ws/2/recording/?query=<lucene>&fmt=json&limit=10
+User-Agent: lb-mapper/<version> (<contact>)
 ```
 
-Use a `User-Agent` header (`lb-mapper/<version> (<contact>)`) and respect the **1 request / second** rate limit.
+Strict **1 req / sec** rate limit; sleep 1.05s between calls.
 
-Build the Lucene query with:
+LB Labs Typesense and MB direct have very different recall. Many recordings exist in MB but never surface from Typesense; they surface immediately from the Lucene index.
 
-- `artist:"<name>"` — exact phrase, prefer the translated English / native form that MB indexes under (e.g. `Jan Lisiecki`, not `ヤン・リシエツキ`; `椎名林檎`, not `Sheena Ringo`).
+#### Building the Lucene query
+
+- `artist:"<name>"` — exact phrase. Prefer the form MB indexes under (`Jan Lisiecki`, not `ヤン・リシエツキ`; `椎名林檎`, not `Sheena Ringo`).
 - 2–4 distinctive `recording:<token>` clauses joined with `AND`. Pick:
-  - Catalog tag + number first: `BWV 1001`, `K. 271`, `Op. 52`, `WoO 31`, `MWV O14`, `D. 550`.
-  - Movement marker if present: `Fuga`, `Rondeau`, `Andantino`.
-  - Distinctive title word for non-classical: `OSCA`, `いとをかし`, `幽霊`.
-- Avoid stuffing too many tokens — MB Lucene treats `AND` strictly, so over-constrained queries return zero. 3–4 tokens is a sweet spot.
+  - Catalog tag + number first (`BWV 1001`, `K. 271`, `Op. 52`, `WoO 31`).
+  - Movement marker if present (`Fuga`, `Rondeau`, `Andantino`).
+  - Distinctive title word for non-classical.
+- 3–4 tokens is the sweet spot. MB Lucene treats `AND` strictly — over-constrained queries return zero.
 
-##### Title simplification before query
+Query priority order for items still missing after 3a–3d:
 
-Most listen titles carry decorations that do NOT appear in the MB recording title. Strip them before tokenizing so the `AND`-joined query actually matches:
+1. Native artist + native track.
+2. Native artist + ASCII tokens when track is mixed-script. Subtitle decorations don't have to appear in the query — verify in post-check.
+3. Romanized artist + romaji track (MB indexes both spellings for some acts, e.g. `Sakuzyo`).
+4. Try both kanji homophones for romaji titles (`Mokuren` → both `木蘭` and `木蓮`).
 
-- **Strip parentheticals**: `(Remastered 2024)`, `(Live)`, `(feat. X)`, `(Arr. ...)`, `(TV Edit)`, `(Extend ver.)`, `(Anime Ver.)`, `[Deluxe]` — these are release metadata, not part of the work title.
-- **Drop after the colon for classical**: `Op. 10: No. 1 in F-Sharp Minor` → keep `Op. 10 No. 1`. The colon-separated tail (movement marker) is often phrased differently in MB (`op. 10 n° 1`, `Op. 10, No. 1`, `Opus 10 No 1`), so narrow by catalog + ordinal and filter in post-check.
-- **Use an ordinal as a second-pass filter, not a search term**: `recording:"No. 1"` is too literal. Keep the opus + work number in ONE clause (`recording:op` `recording:10` `recording:1`) then verify the returned title contains the right movement.
-- **Try the bare catalog alone** when artist + catalog + one distinctive word returns zero — e.g. `artist:"Boris Giltburg" AND recording:Polichinelle` hits even if `Op. 3` never appears in the indexed title.
+#### Title simplification before tokenizing
 
-##### Remaster / re-recording equivalence
+Listen titles carry decorations that don't appear in MB. Strip them so the `AND`-joined query matches:
 
-Listens tagged `(Remastered 20XX)`, `(2024 Remaster)`, `(Recast 2026)`, or `(XX Edition)` are **acceptable matches** to the original recording MBID when no dedicated MBID exists for the remaster. Examples that mapped this way:
+- Strip parentheticals: `(Remastered 2024)`, `(Live)`, `(feat. X)`, `(Arr. ...)`, `(TV Edit)`, `(Extend ver.)`, `[Deluxe]`.
+- Drop the colon-tail for classical: `Op. 10: No. 1 in F-Sharp Minor` → keep `Op. 10 No. 1`. Movement markers after the colon are phrased variably; narrow by catalog + ordinal, verify movement in post-check.
+- Use ordinals as filters, not search terms. `recording:"No. 1"` is too literal — use bare `recording:op AND recording:10 AND recording:1`.
+- Try the bare catalog alone when artist + catalog + one distinctive word returns zero.
 
-- `妖精帝國 — 春へ (Recast 2026)` → MB `春へ` (2011 original).
-- `妖精帝國 — 月下狂想 (Recast 2026)` → MB `月下狂想` (original).
-- `Dr. Hoffman — Resident Evil - Main Title (Remastered 2024)` → would map to the original main title MBID if present.
+#### Lucene quoting pitfalls
 
-Rule: if the only difference between listen and candidate is a remaster/re-recording annotation AND the artist + work + key + movement are otherwise identical, treat as `link`. Prefer a dedicated remaster MBID if MB has one, otherwise map to the original.
+- Diacritics in quoted phrases break the search. ASCII-fold or drop the quotes when the name has accents.
+- Don't quote catalog tokens. MB indexes them variably (`op. 10`, `Op. 10`, `Opus 10`).
+- Periods and spaces inside quoted phrases trigger literal matching.
 
-##### Lucene quoting pitfalls
+#### Score interpretation
 
-- **Accented characters in quoted phrases break the search**: `artist:"Clément Lefebvre"` returns zero, but `artist:Lefebvre` (unquoted) returns the match. ASCII-fold the artist name or drop the quotes when the name contains diacritics.
-- **Don't quote catalog tokens**: `recording:"Op. 10"` is parsed literally and often misses; MB indexes it variably as `op. 10`, `Op. 10`, `Opus 10`. Use bare `recording:op AND recording:10` instead.
-- **Periods and spaces inside quoted phrases** trigger literal matching. Leave catalog numbers unquoted.
+`score=100` is necessary but not sufficient — Lucene treats partial token matches as 100. Always verify the returned `recording.title` matches the listen's track identity using the Phase 4 rules. Common false hit: same artist + same opus number on a different opus + different movement.
 
-##### Japanese track-title variants
+### 3f. Merge
 
-For native Japanese tracks where the primary search fails, try all four combinations of artist × title script:
+Merge candidates from all angles, dedup by `recording_mbid`, preserve provenance (`tag` field: `lb`, `lb-reverse`, `mb`, `4a`). MB-direct hits go to the top of the candidate list — far more selective than Typesense fallbacks.
 
-1. Native artist + native title (e.g. `妖精帝國 — 春へ`).
-2. Native artist + EN title (if translated).
-3. EN artist + native title (common for mainstream J-rock indexed with romanized artist but native track).
-4. EN artist + EN title.
+## Phase 4: Evaluate
 
-MB favors native script for Japan-primary acts (`妖精帝國`, `椎名林檎`, `東京事変`) and romanized for acts with international presence (`YOASOBI`, `Hikaru Utada`).
+For each listen, decide a verdict using the top ~5 candidates and the rules below. No hardcoded thresholds — apply the rules as reasoning steps. Batches ≥ 50 items: parallelize into ~100-item chunks across Codex MCP sessions or Claude Code subagents; each chunk writes `[{idx, verdict, recording_mbid, reason}, ...]`; merge by `idx`.
 
-Score interpretation:
+### Verdict categories
 
-- MB returns a `score` per recording. `score=100` is necessary but **not sufficient** — Lucene treats partial token matches as 100. Always verify the returned `recording.title` actually matches the listen's track identity (work + catalog + key + movement) using the Phase 5 rules.
-- A genuine match: catalog number aligns exactly, movement marker matches, key matches.
-- A false hit: same artist + same opus number on a *different* opus + different movement (Lucene matched the artist + the integer "26" but `op. 26 no. 3` ≠ `Op. 26 No. 1`).
+| Verdict  | Meaning                                                                                                                                                                                    |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `link`   | Confident match: same work, compatible artist, title identifies the same recording.                                                                                                        |
+| `review` | Plausible but ambiguous: short title, larger ensemble credit, arrangement differences, partial title overlap.                                                                              |
+| `skip`   | No usable match — but the *recording* may still propagate to MB on a future sync. Default for native-script JP artists, non-classical katakana scrobbles, Latin-only with weak candidates. |
+| `delete` | The specific recording will not propagate. Triggers detailed under "CJK / katakana handling" below.                                                                                        |
 
-Skip the MB fallback when the artist is a known katakana-only obscure act (Phase 5 Case A) — MB direct won't have these either.
+The skip vs delete question is *"will this specific recording propagate to MB on a future sync?"* — not "does the artist have MB presence?". A famous artist's Apple-Music-JP exclusive may never appear in MB despite the artist having a rich MB catalog. The mainstream-artist heuristic protects only non-classical tracks (Case B default).
 
-#### 4d. Merge
-
-Merge recovered results from 4a / 4b / 4c into the primary result set, preserving provenance (`retry_used`, `mb_direct`) so Phase 5 can weight them. MB direct hits should be presented to the evaluator as the *top* candidates because they're far more selective than Typesense fallbacks.
-
-### Phase 5: Evaluate Matches
-
-For each listen, decide the verdict using the top ~5 candidates. Do NOT use hardcoded thresholds — apply the domain rules below as reasoning steps.
-
-When the batch is ≥ 50 items, parallelize: split into chunks of ~100, spawn one evaluator per chunk (Codex MCP session or Claude Code subagent), and merge JSON verdicts.
-
-#### Artist Verification
+### Artist verification
 
 - `artist_credit_name` must plausibly refer to the same artist(s) as the listen.
-- Separator variations (`&`, `,`, `feat.`, `and`, `vs`, `vs.`) are equivalent — Japanese hardcore / dōjin scrobbles often render `vs` as `&` (e.g. `REDALiCE & USAO` ≡ MB `REDALiCE vs USAO`).
-- Minor spelling / accent differences are OK (e.g. `Capuccelli` ≈ `Capucelli`).
-- **Substring false positives are mismatches**: `Foster` ≠ `Neil Foster` ≠ `Kendra Foster`.
-- CJK artists may appear directly in MB credits as aliases — check both the original and the translation against the credit.
-- For romanized Japanese acts, check both the English form and the native form (e.g. `Tokyo Incidents` AND `東京事変`).
+- Separator equivalence: `&`, `,`, `feat.`, `and`, `vs`, `vs.` are interchangeable. JP hardcore / dōjin scrobbles often render `vs` as `&`.
+- Minor spelling / accent differences OK.
+- Substring false positives are mismatches: `Foster` ≠ `Neil Foster`.
+- For romanized JP acts, check both English and native forms against the credit.
 
-#### Title Matching — General
+#### Artist-equivalence rules
+
+- Listen artist appears as `feat. <listen_artist>` inside the candidate's credit.
+- Listen artist appears as the primary given name only, surname stripped — Japanese romanized given-name only. Do not apply to Western names.
+- EN ↔ native variants of the same person via the cache.
+- Romanization-system swaps (Kunrei-shiki ↔ Hepburn): `Sakujo` ≡ `Sakuzyo`, `si` ≡ `shi`, `tu` ≡ `tsu`, `tyu` ≡ `chu`.
+- Composer ↔ performer rewrap: when MB credits the performing vocalists / ensemble but the listen credits the composer, accept if recording identity holds.
+
+### Title matching
 
 - Same recording, not just overlapping words.
-- Short / generic titles (`Alive`, `Home`, `Love`, `Shine`) need stronger artist + release corroboration.
-- **One-sided annotations** — `(TV Edit)`, `[Deluxe]`, `(Arr. for Piano)`, `(feat. X)`, `(Live)`, `(Remastered 2024)`, `(Recast 2026)`, `(Extend ver.)`, `(Anime Ver.)` — are usually noise. Accept if the underlying work matches. See Phase 4c "Remaster / re-recording equivalence" for the remaster rule.
-- **Two-sided conflicts** — e.g. listen `"Orchestral Version"` vs match `"Acoustic"` — indicate different recordings; reject unless release context reconciles.
+- Generic short titles (`Alive`, `Home`, `Love`, `Shine`) need stronger artist + release corroboration.
+- One-sided annotations are noise: `(TV Edit)`, `[Deluxe]`, `(Arr. for Piano)`, `(feat. X)`, `(Live)`, `(Remastered 20XX)`, `(Recast 20XX)`, `(Extend ver.)`, `(Anime Ver.)`, `(Transcr. for ...)`.
+- Two-sided conflicts indicate different recordings — listen `Orchestral Version` vs candidate `Acoustic` rejects.
+- Remaster equivalence: `(Remastered 20XX)` / `(Recast 20XX)` / `(XX Edition)` map to the original-recording MBID when no dedicated remaster MBID exists, provided artist + work + key + movement otherwise match.
+- Unicode hyphen / dash equivalence: ASCII `-` (U+002D) ≡ `‐` (U+2010) ≡ `‒` ≡ `–`.
+- Instrumental annotation equivalence: `(without vocals)`, `(without 娘々)`, `(instrumental)`, `(off-vocal)`, `(karaoke)` match MB recordings tagged with the same kind of annotation.
+- Kanji homophones: a romaji title can map to multiple kanji renderings (e.g. `Mokuren` → either `木蓮` or `木蘭`). When this is the only difference and artist + release match, treat as a link.
 
-#### Title Matching — Classical Music (strict)
+### Classical music — strict identity
 
 Classical titles encode precise work identity. Two recordings that share a generic word (`Allegro`, `Sonata`, `Prelude`) but differ in any of the following are **different works**:
 
-- **Catalog numbers**: Op./Opus, K./KV (Mozart), BWV (Bach), TWV (Telemann), HWV (Handel), RV (Vivaldi), Wq (C.P.E. Bach), D. (Schubert), S. (Liszt), Hob. (Haydn), WoO (Beethoven works without opus number), MWV (Mendelssohn).
+- **Catalog numbers**: Op., K. / KV (Mozart), BWV (Bach), TWV (Telemann), HWV (Handel), RV (Vivaldi), Wq (C.P.E. Bach), D. (Schubert), S. (Liszt), Hob. (Haydn), WoO (Beethoven without opus), MWV (Mendelssohn), B. (Dvořák).
 - **Work number within an opus**: `No. 2` vs `No. 1` in the same opus → different work.
-- **Key signature**: `C major` vs `B-flat minor` → different work.
-- **Movement marking**: if the listen specifies `II. Allegro` and the candidate is `III. Allegro giocoso` or the whole work, that's a mismatch.
+- **Key signature**: different key → different work.
+- **Movement marking**: listen `II. Allegro` vs candidate `III. Allegro giocoso` is a mismatch.
+- **Composer-catalog mismatch** (listen `BWV 1178` vs candidate `WoO 31`) → reject even when artist matches.
 
-When a Bach / Mozart / Beethoven / etc. catalog mismatch exists (e.g. listen says `BWV 1178`, all candidates say `WoO 31`), reject even though the artist matches — see deletion rule below.
+Cross-catalog equivalences: `K.` ≡ `KV`; nicknames ≡ formal titles (`Moonlight Sonata` ≡ `Op. 27 No. 2`; `Für Elise` ≡ `Bagatelle WoO 59`; `Die Forelle` ≡ `The Trout, D. 550`).
 
-##### Rejections
+### CJK / katakana handling — the skip / delete boundary
 
-- Listen `Nocturne in E-flat major, Op. 9 No. 2` vs match `Nocturne in B-flat minor, Op. 9 No. 1` — same opus, different nocturne and key.
-- Listen `Violin Concerto in D major, Op. 77: II. Adagio` vs match `... III. Allegro giocoso` — wrong movement.
-- Listen `Prelude and Fugue in C major, BWV 846` vs match `... in C minor, BWV 871` — both C-something preludes-and-fugues, but WTC Book I vs Book II.
-- Listen `Chaconne and Fugue in D Minor, BWV 1178` vs match `Fugue in D Major, WoO 31` — different composer catalog (Bach vs Beethoven).
+A **katakana-only artist** has a core name in pure katakana (transliterating a non-Japanese name). Standard kanji ensemble suffixes (`四重奏団` quartet, `管弦楽団` orchestra, `室内管弦楽団` chamber orchestra, `交響楽団` symphony orchestra, `合唱団` choir) do not disqualify it.
 
-##### Acceptances
+**Case A: katakana artist + classical track → `delete`** when no candidate matches the work identity (catalog + movement + key) after Phase 3 has exhausted every angle. This applies even to mainstream classical artists. Apple Music JP / SmashTunes album-track scrobbles for any classical artist do not propagate to MB on later syncs.
 
-- Listen `Lakme, Act 1: Duo des fleurs (Transcr. Ducros for Cello Ensemble) [Classical Session]` vs match `Lakme: Act 1: Duo des fleurs` — arrangement and release annotations are noise.
-- Listen `Mozart: Piano Sonata K. 331: III. Rondo alla Turca` vs match `Piano Sonata no. 11 in A major, KV 331: III. Alla turca` — `K.` ≡ `KV`; `Rondo alla Turca` is the nickname for the `Alla turca` movement.
-- Listen `Beethoven: Moonlight Sonata: I. Adagio sostenuto` vs match `Piano Sonata no. 14 in C-sharp minor, op. 27 no. 2: I. Adagio sostenuto` — `Moonlight Sonata` = Op. 27 No. 2.
-- Listen `Schubert: Die Forelle, D. 550` vs match `The Trout, op. 32, D 550` — same lied; matching D. number confirms identity despite language.
+**Case B: katakana artist + non-classical track → `skip` by default**. Promote to `delete` only when the title carries an explicit arrangement marker (`(Arr. for ...)`, `(Transcr. for ...)`, `(After [Composer]'s [Work])`) OR web search confirms a classical work behind a colloquial title, AND the verified-classical re-query also returns no MB match.
 
-#### CJK / Katakana Handling
+**Native-script artist (kanji / hiragana)** — never auto-delete; their recordings DO propagate. Verdict is `skip` when no match is found.
 
-##### Katakana-only artist
+**CJK-localized classical title on a non-katakana artist** — `delete` when no candidate matches after title translation AND reverse-direction retry. If neither the English nor the native form finds the recording, it won't appear.
 
-A **katakana-only artist** is one whose core name is pure katakana (transliterating a non-Japanese name). Standard Japanese ensemble / instrument suffixes in kanji — `四重奏団` (quartet), `管弦楽団` (orchestra), `室内管弦楽団` (chamber orchestra), `交響楽団` (symphony orchestra), `合唱団` (choir) — do NOT disqualify it. The core name is still a transliteration.
+**Mixed-script artists** (katakana + Latin) — not auto-deleted; many have legitimate MB entries.
 
-Verdict rule — **two cases**, distinguished by whether the track is a classical work (catalog marker / form word):
+When deciding "no candidate survives", you must verify candidates against the **track title**, not just the artist. Typesense returns fuzzy fallback hits — any track by the artist whose title vaguely resembles the search. Always check `recording_name` matches the listen's track identity (work + catalog + movement + key).
 
-**Case A: katakana artist + classical track → `delete`** when all retries (primary + 4a + 4b + MB direct) fail to produce a candidate matching the work identity (catalog + movement + key).
+## Phase 5: Reconcile
 
-This applies even to mainstream classical artists (Lang Lang, Mitsuko Uchida, Vienna Philharmonic, Jan Lisiecki, Arthur Grumiaux). Empirical observation: Apple Music JP / SmashTunes album-track scrobbles for any classical artist do not propagate to MusicBrainz on later syncs — the artist exists in MB, but this *specific recording* never appears. Keeping these as `skip` re-evaluates doomed candidates on every future run.
+Phase 4 evaluators (especially parallel chunks) are systematically biased toward `skip` and miss most Case A `delete` candidates and some recoverable links. The orchestrator owns the final boundary.
 
-**Case B: katakana artist + non-classical track → `skip` by default**; promote to `delete` only when the track is verified as a classical arrangement / transcription with a non-classical-looking title.
+### 5a. Promote skip → delete (Case A)
 
-Default `skip` covers genuine non-classical content: J-pop, anime / game-OST piano covers (`Lang Lang — To Zanarkand`, `Stephen Hough — Remember Me [From "Coco"]`), contemporary originals (`Alice Sara Ott — Melodia`, `Lara Downes — Wondrous Free`), pop / indie. These do propagate to MB over time.
+For each `skip`, promote to `delete` when **all** hold:
 
-Promote to `delete` when ALL hold:
-
-- Explicit arrangement marker — `(Arr. for ...)`, `(Transcr. for ...)`, `(After [Composer]'s [Work])` — OR web search confirms a classical work behind a colloquial title (e.g. `Vanessa Wagner — 2 Tone-Pictures: II. The Seal-Woman's Sea-Joy` is Bax; `ハレム — Gymnopédie (After Satie's Gymnopédie No. 1)` is Satie).
-- Re-query MB Lucene with the verified composer + work title also returns no match.
-
-**Important**: "no candidate survives evaluation" must verify candidates against the track title, not just the artist. LB Labs Typesense returns fuzzy fallback hits — ANY track by the artist whose title vaguely resembles the search. Always check `recording_name` matches the listen's track identity (work + catalog + movement + key).
-
-##### Native-script artist (kanji / hiragana)
-
-Artists whose core name is kanji or hiragana (e.g. `椎名林檎`, `藤田真央`, `街風めい`, `辻井伸行`, `角野隼斗`) are **native Japanese artists** with legitimate MB entries. Do NOT auto-delete. If no match is found, verdict is `skip`.
-
-##### CJK-localized track title
-
-A listen with a CJK-translated track title (e.g. `ピアノ協奏曲 第3番 ニ短調 作品30`) that yields no evaluation-compatible candidate after title translation AND reverse-direction retry → `delete`. These are localized classical metadata; if even the English work title doesn't find the recording, it's unlikely to exist in MB.
-
-##### Mixed scripts
-
-Artists with mixed katakana + Latin (e.g. `キャロル&チューズデイ(Vo.Nai Br.XX&Celeina Ann)`) are NOT auto-deleted; many have legitimate MB entries.
-
-#### Verdict Categories
-
-| Verdict  | Meaning                                                                                                                                                                                                                                                  |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `link`   | Confident match: same work, compatible artist, title identifies the same recording.                                                                                                                                                                      |
-| `review` | Plausible but ambiguous: short title, larger ensemble credit, arrangement differences, partial title overlap.                                                                                                                                            |
-| `skip`   | No usable match — but the *recording* may still propagate to MB on a future sync. Native-script Japanese artists, non-classical katakana scrobbles, non-CJK listens with weak candidates. Leave for future runs.                                         |
-| `delete` | The specific recording will not propagate. Triggers: (1) Case A — katakana artist + classical track + no surviving candidate; (2) Case B — katakana artist + verified classical arrangement + no MB match; (3) CJK-localized classical title + no match. |
-
-**Skip vs delete boundary**: the question is *"will this specific recording propagate to MB on a future sync?"* — not "does the artist have MB presence?". A Lang Lang Apple-Music-JP exclusive piano arrangement and a Mitsuko Uchida regional album track both have famous artists with rich MB catalogs but the specific recording never appears. The mainstream-artist heuristic protects only non-classical tracks (Case B default).
-
-##### Reconciliation pass — before Phase 6
-
-Phase 5 evaluators (parallel chunks) are systematically biased toward `skip` and miss most Case A / Case B `delete` candidates. The orchestrator owns the final delete / skip boundary by running a reconciliation pass over all current `skip` and `delete` verdicts. **This pass is mandatory** — without it, Phase 5 miscalibration leaks into Phase 6.
-
-**Promote `skip` → `delete`** when the listen meets Case A criteria:
-
-- Listen's artist OR title contains katakana, OR the track title is itself CJK-localized classical metadata.
-- Track is clearly classical: catalog marker (`BWV`, `K./KV`, `Op.`, `D.`, `S.`, `Hob.`, `WoO`, `MWV`, `HWV`, `RV`, `TWV`, `Wq`, `Sz.`, `L.`, `FP`, `H.`, `M.`, `CD`); OR form word (`Sonata`, `Concerto`, `Symphony`, `Prelude`, `Fugue`, `Nocturne`, `Étude`, `Variations`, `Chaconne`, `Partita`, `Suite`, `Quartet`, `Quintet`, `Waltz`, `Scherzo`, `Mazurka`, `Ballade`, `Impromptu`, `Fantaisie`, `Fantasien`, `Intermezzo`, `Capriccio`, `Toccata`, `Rondo`, `Minuet`, `Polonaise`, `Cantata`, `Romance`, `Barcarolle`, `Kinderszenen`, `Davidsbündlertänze`, `Stimmungsbilder`, `Bergamasque`, `Träumerei`, `Tombeau`); OR composer-specific localized title (`スラヴ行進曲` = Slavonic March, `朱色の塔` = Torre Bermeja).
+- Listen artist is katakana-only OR the track title is CJK-localized classical metadata.
+- Track is clearly classical:
+  - **Catalog marker** present: `BWV`, `K.`, `KV`, `Op.`, `D.`, `S.`, `Hob.`, `WoO`, `MWV`, `HWV`, `RV`, `TWV`, `Wq`, `Sz.`, `L.`, `FP`, `H.`, `M.`, `B.`, `CD`.
+  - OR **form word**: `Sonata`, `Concerto`, `Symphony`, `Prelude`, `Préludes`, `Fugue`, `Nocturne`, `Étude`, `Variations`, `Chaconne`, `Partita`, `Suite`, `Quartet`, `Quintet`, `Waltz`, `Scherzo`, `Mazurka`, `Ballade`, `Impromptu`, `Fantaisie`, `Fantasien`, `Intermezzo`, `Capriccio`, `Toccata`, `Rondo`, `Minuet`, `Polonaise`, `Cantata`, `Romance`, `Barcarolle`, `Bagatelle`, `Kinderszenen`, `Davidsbündlertänze`, `Stimmungsbilder`, `Bergamasque`, `Träumerei`, `Tombeau`, `Gymnopédie`, `Divertimento`, `Sinfonia`.
+  - OR **composer-specific localized title** (`スラヴ行進曲` = Slavonic March, `朱色の塔` = Torre Bermeja).
 - No surviving candidate matches the work identity — only Typesense fuzzy fallbacks.
 
-For Case B (katakana + non-classical title), delegate per-item web verification to Codex with `Use web search` instructed explicitly. Classify each as classical / non-classical; for classical items, re-query MB Lucene with the canonical composer + work. Promote to `delete` only when the work is verified-classical AND the MB re-query also fails.
+This is a regex match — be aggressive. Add new catalog markers and form words as you discover them.
 
-**Demote `delete` → `skip`** when the artist has no CJK at all (Latin-only name) — deletion is too aggressive without script evidence of Apple Music JP origin.
+### 5b. Web-verify Case B candidates
 
-**Keep as `skip`** native-script (kanji / hiragana) artists like `角野隼斗`, `藤田真央`, `三浦謙司` — their specific recordings may still propagate.
+For `skip` items where the artist is katakana-only and the track is non-classical-looking, delegate per-item web verification to Codex with explicit `Use web search` instruction. Classify each as classical / non-classical. For confirmed-classical items, re-query MB Lucene with the canonical composer + work. Promote to `delete` only when the work is verified-classical AND the MB re-query also fails.
 
-The reconciliation pass must run **before** Phase 6 presentation. Be conservative on demotion, aggressive on Case A promotion: the regex match is the load-bearing safeguard, so add new catalog markers and form words to it as you discover them.
+### 5c. Demote delete → skip
 
-**Past-run feedback (2026-05-07, 500-listen run)**: without this pass, the run produced 0 deletes despite ~88 katakana-classical items mechanically meeting Case A. Evaluator chunks 1 / 2 marked 3 / 11 deletes; chunks 3 / 4 / 5 marked 0 each — the variance is structural, not stochastic. The promotion pass recovered all 88. Bucket B (87 items) yielded 7 additional deletes after Codex web verification.
+- Demote when the listen's artist has no CJK at all (Latin-only name) — deletion is too aggressive without script evidence of Apple Music JP origin.
+- Keep `skip` for native-script (kanji / hiragana) artists — their specific recordings may still propagate.
 
-### Phase 6: Present for Approval
+### 5d. Skip-recovery sweep
+
+For every remaining `skip` whose Phase 3 candidates are Typesense fallbacks (top hit's `recording_name` doesn't match `track_orig`), run an MB-direct query using the priority order from Phase 3e. This is the highest-yield late-stage recovery — Phase 3e was invoked for items with **zero** Phase 3 hits, but listens with fuzzy fallbacks never reached it.
+
+After the MB-direct query, if a clean match appears, promote `skip` → `link`. Persist any new aliases discovered (especially the EN ↔ native pair) to the cache in **both directions**.
+
+Be conservative on demotion, aggressive on Case A promotion. Native-script artists with no MB match after the sweep stay `skip` — deletion is permanent and these artists' other recordings DO appear in MB.
+
+## Phase 6: Present
 
 Group by verdict. Never execute without explicit user approval.
 
-**Links (N items)** — each:
-
 ```text
-[artist] — [track]
-  -> [match_artist] — [match_title] ([recording_mbid])
+Links (N items):
+  [artist] — [track]
+    -> [match_artist] — [match_title] ([recording_mbid])
+
+Reviews (N items):
+  [artist] — [track]
+    -> [match_artist] — [match_title] ([recording_mbid])
+    Note: [reason for uncertainty]
+
+Deletions (N items):
+  [artist] — [track] (listened_at: [timestamp])
+    Reason: [why this should be deleted]
+
+Skips (N items): list briefly.
 ```
 
-**Reviews (N items)** — each with a one-line note:
+For groups > ~30 items, write the full detail to `/tmp/review.md` and show a summary + file path. Always show reviews and deletions inline — they require judgement.
 
-```text
-[artist] — [track]
-  -> [match_artist] — [match_title] ([recording_mbid])
-  Note: [reason for uncertainty]
-```
+User options: approve all · approve links only · approve links + deletions, defer reviews · cherry-pick by idx · override verdicts · re-evaluate specific items.
 
-**Deletions (N items)** — each with a reason:
-
-```text
-[artist] — [track] (listened_at: [timestamp])
-  Reason: [why this should be deleted]
-```
-
-**Skips (N items)** — list briefly.
-
-For large batches (> ~30 items per group), write the full detail to a temp file (e.g. `/tmp/review.md`) and show a summary + file path in the chat. Always show reviews and deletions inline since they require judgement.
-
-User options:
-
-- Approve all
-- Approve links only
-- Approve links + deletions, defer reviews
-- Cherry-pick by idx
-- Override verdicts (promote review → link, or demote link → skip)
-- Re-evaluate specific items
-
-### Phase 7: Execute
-
-After approval:
+## Phase 7: Execute
 
 ```bash
-echo '{"mappings": [...], "deletions": [...]}' | \
-    uv run python -m lb_mapper.cli.execute
+echo '{"mappings": [...], "deletions": [...]}' | uv run python -m lb_mapper.cli.execute
 ```
 
 - Each mapping: `{recording_msid, recording_mbid}`.
 - Each deletion: `{listened_at, recording_msid}`.
 
-The script handles rate limits internally and reports per-action progress.
+The script handles rate limits internally and reports per-action progress. A transient HTTP 500 on a deletion or mapping is non-fatal — retry once after a short delay.
 
-## Parallelism
+## Important notes
 
-For batches ≥ 50 items during Phase 5, parallelize:
-
-1. Split listens into ~100-item chunks.
-2. Prepare one input JSON file per chunk with listens + top-5 candidates.
-3. Spawn one evaluator per chunk — Codex MCP session preferred, Claude Code subagent as fallback.
-4. Each evaluator writes a verdict JSON `[{idx, verdict, recording_mbid, reason}, ...]`.
-5. Merge by `idx` after all complete.
-
-### Evaluator calibration (important)
-
-Parallel evaluators **vary by chunk composition**. On the same prompt, two chunks of 100 items produced 0 and 4 links respectively — not because one was smarter, but because chunks with more well-known acts and cleaner candidates yield more links. Don't panic when one chunk returns 0 — inspect the skip sample. If most skips match the "Typesense fallback; title doesn't match" pattern AND the artist is a well-known Japanese act, that's a Phase 3.5 gap (missing reverse retry), not an evaluator bug.
-
-After all chunks return, always run a **sanity sweep** over the skip list: group skips by artist, count, and flag any artist appearing 3+ times whose name is in the well-known-Japanese-acts list (Tokyo Incidents, Sheena Ringo, SawanoHiroyuki[nZk], EGOIST, Mika Nakashima, May'n, halca, Denims, Ichiyo Izawa, Yoko Kanno, etc.). These are near-certain reverse-retry candidates — delegating them to Codex with web-search access typically rescues 30-50% as links. Budget ~5-10 minutes extra per 500-listen run for this sanity sweep; it's the single highest-yield recovery step.
-
-Also note: evaluators that omit `recording_mbid` on non-link entries (`{idx, verdict, reason}` only) are valid and should be handled by downstream code without crashing. Normalize before merging.
-
-## Important Notes
-
-- NEVER submit a mapping or delete a listen without explicit user approval.
-- Two search backends are used in parallel:
-  - **LB Labs Typesense** (`/recording-search/json`): fast batch search, fuzzy matching. Good first pass but returns *fallback hits* — any track by the artist whose title vaguely resembles the query — when the exact recording isn't indexed. These look like matches but aren't.
-  - **MusicBrainz Lucene direct** (`musicbrainz.org/ws/2/recording/`): precise field-targeted queries with `artist:"…" AND recording:<token>` clauses. Strict 1 req/s rate limit. Use as Phase 4c fallback when LB Labs misses or returns garbage.
-- Rate limits: LB API returns `X-RateLimit-Remaining` headers; the Python client sleeps automatically when near the limit. LB Labs has no explicit rate limit. MB direct is 1 req/sec — sleep 1.05s between calls.
-- The translation cache grows across runs — early runs are slower, later runs are faster.
-- When in doubt, prefer `skip` over `delete` for non-CJK listens. Deletion is irreversible.
+- **NEVER** submit a mapping or delete a listen without explicit user approval.
+- LB Labs Typesense returns fuzzy fallback hits — always cross-check `recording_name` against the listen's track identity.
+- MB direct (`musicbrainz.org/ws/2/recording/`) has strict 1 req/sec; sleep 1.05s between calls.
+- LB API rate limits are surfaced via `X-RateLimit-Remaining`; the Python client sleeps automatically.
+- When in doubt for non-CJK listens, prefer `skip` over `delete`. Deletion is irreversible.
+- Evaluators that omit `recording_mbid` on non-link entries are valid — normalize before merging.
