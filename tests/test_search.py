@@ -182,11 +182,6 @@ class SearchTests(unittest.TestCase):
         ):
             lb_search.search_recording('A', 'B')
 
-    def test_cjk_punctuation_and_supplementary_ideographs(self):
-        self.assertFalse(lb_search.contains_cjk('Title。'))
-        self.assertTrue(lb_search.contains_cjk('𠀀'))
-        self.assertTrue(lb_search.contains_cjk('アルフレッド'))
-
     def test_musicbrainz_lookup_url_and_metadata_includes(self):
         def respond(request):
             self.assertEqual(

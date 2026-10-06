@@ -7,7 +7,7 @@ Project-specific instructions for any coding assistant working in this repositor
 The shared `map-listens` skill owns matching judgment, research, final review, and authorization. Python owns API calls, grouping, validation, and execution records. Keep artist aliases and musical identity reasoning in the skill.
 
 - `lb_client.py` owns authenticated ListenBrainz operations and rate limits.
-- `lb_search.py` owns LB Labs search and CJK detection.
+- `lb_search.py` owns LB Labs search and bulk recording lookup.
 - `mb_search.py` owns MusicBrainz search and recording lookup. A single process must own MusicBrainz calls during a run to respect its shared rate limit.
 - `history.py` reads enriched history exports newest first.
 - `review.py` groups occurrences by MSID and requires complete decisions before preparing actions.
