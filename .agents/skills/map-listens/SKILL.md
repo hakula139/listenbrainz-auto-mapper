@@ -11,9 +11,9 @@ Collect and process recent unlinked listen occurrences for `LB_USER`, using `LB_
 
 The coordinating agent owns final review. Honor authorization already given for mappings, deletions, and classical substitutions. If the user asks the agent to review and execute, perform that review and execute within that scope. Obtain any missing mutation authorization before applying actions.
 
-The cleanup goal is best-effort matching followed by deletion of genuinely unresolved listens. Search errors and unfinished research remain pending. A successful search with no acceptable candidate can support deletion after recovery searches and final review. Script or language alone does not establish that a listen is unmatchable.
+The cleanup goal is best-effort matching followed by deletion of genuinely unresolved listens. Search errors and unfinished research remain pending. A successful search with no acceptable candidate can support deletion after independent MusicBrainz recovery and final review. Labs can return an empty result when its search backend fails, so a Labs miss alone never establishes absence. Script or language alone does not establish that a listen is unmatchable.
 
-For classical music, another performer's recording is acceptable when it represents the same work, catalog number, key, and movement. Label it `substitute` so the changed performer is visible in the review record. Linking changes the MSID mapping and preserves the submitted title and metadata.
+For classical music, another performer's recording is acceptable when it represents the same work, catalog number, key, movement, and arrangement. Preserve instrumentation and named arrangements when substituting performers. Label it `substitute` so the changed performer is visible in the review record. Linking changes the MSID mapping and preserves the submitted title and metadata.
 
 ## Run artifacts and commands
 
@@ -23,7 +23,7 @@ Run Python with `uv run` from the repo root. Create an ignored `runs/<run-name>/
 run=runs/<run-name>
 mkdir -p "$run"
 uv run python -m lb_mapper.cli.fetch_listens COUNT --output "$run/listens.json"
-uv run python -m lb_mapper.cli.search_batch --input "$run/listens.json" --output "$run/labs.jsonl"
+uv run python -m lb_mapper.cli.lookup_batch --input "$run/listens.json" --output "$run/exact.jsonl"
 ```
 
 For large or sparse histories, use an enriched history export. The API recommends exports when a scan would exceed roughly 10,000 listens. An export job can be resumed using its saved state, and exported months are processed newest first:
@@ -35,6 +35,14 @@ uv run python -m lb_mapper.cli.fetch_listens COUNT --export "$run/history.zip" -
 
 The snapshot contains `{user, requested, total, linked, unlinked}`. Each occurrence retains `listened_at`, `recording_msid`, `artist`, `track`, `release`, `additional_info`, and `mbid_mapping`. The search helper groups occurrences by MSID, preserving all occurrences under `listens`. Review conflicting metadata within a group before selecting one mapping.
 
+The bulk lookup submits up to 100 original artist / title pairs per request. Its canonical normalized candidate still needs identity review. Request echoes and indices establish input routing, while artist, title, version, and release fields establish musical identity. Different raw pairs can collide under server normalization, so a missing row remains unresolved. Do not propagate candidates across merely normalized pairs.
+
+Review lookup candidates, then write unresolved groups to `unresolved.json` as an array of objects or a filtered snapshot and run fuzzy search:
+
+```bash
+uv run python -m lb_mapper.cli.search_batch --input "$run/unresolved.json" --output "$run/labs.jsonl"
+```
+
 Search output is JSONL. Each record includes the input, `source`, `query`, and `status`. Successful records contain `results`, while failed records contain `error`. Reusing the output file resumes successful queries and retries failed ones. Never interpret `status: error` as no match.
 
 For recovery queries, write an array of objects to a JSON file. Each object identifies its `recording_msid` and either `artist` / `track` or an explicit MusicBrainz Lucene `query`:
@@ -43,7 +51,7 @@ For recovery queries, write an array of objects to a JSON file. Each object iden
 uv run python -m lb_mapper.cli.search_batch --source musicbrainz --input "$run/queries.json" --output "$run/musicbrainz.jsonl"
 ```
 
-An object with `recording_mbid` performs a MusicBrainz lookup with artist credits, releases, ISRCs, and work relationships. One process owns MusicBrainz requests during a run. The client spaces requests by 1.1 seconds.
+An object with `recording_mbid` performs a MusicBrainz lookup with artist credits, releases, ISRCs, and work relationships. One process owns MusicBrainz requests during a run. The client spaces requests by 1.1 seconds and resolves merged recording identifiers to their surviving ID. Search records retain `result_count`, `result_offset`, and `next_offset` when further results exist. Narrow a broad query or request another page using its `offset` before concluding that no acceptable candidate exists.
 
 ## Finding an acceptable match
 
@@ -61,18 +69,20 @@ For unresolved items, use the recovery angles justified by their metadata:
 - Direct MusicBrainz queries with distinctive title tokens, release context, ISRC, or classical catalog / movement identifiers. Broaden classical searches to other performers before declaring failure.
 - Web research on MusicBrainz, the source album page, artist discography, or publisher catalog to resolve naming and work identity.
 
-Use the old translation cache only as unverified hints. Record verified aliases with their context and source in the run evidence. Do not infer one-to-one title translations from a flat bidirectional cache.
+Record verified aliases with their context and source in the run evidence. Do not infer one-to-one title translations from a flat bidirectional cache.
 
 Use GPT-6 Luna (`gpt-6-luna`) for mapping-check agents. The coordinating agent reviews their evidence and owns final decisions. If that model is unavailable, report the limitation before choosing another model.
 
-For large runs, native subagents can research disjoint MSID groups and propose decisions with evidence. Give each agent only its relevant snapshot and candidates, plus this skill. Keep agents read-only against ListenBrainz and give their output files distinct owners. Use the shared ACP Delegation skill only when consulting another configured assistant materially helps. Every proposed deletion and classical substitution receives the coordinating agent's final review.
+For large runs, native subagents can research disjoint MSID groups and propose decisions with evidence. Give each agent only its relevant snapshot and candidates, plus this skill. Keep agents read-only against ListenBrainz and give their output files distinct owners. Use the shared ACP Delegation skill only when consulting another configured assistant materially helps. Before proposing deletion, check a distinctive title without the original artist restriction, or use a verified alternate credit with release / catalog context when the title is generic. For localized releases, broaden to verified romanized titles, credited composers, ensembles, and source-album names. A second query constrained to the same original artist and translated release does not establish that recovery is complete. Review any partial or truncated search results before concluding absence.
+
+Every proposed deletion and classical substitution receives the coordinating agent's final review.
 
 ## Decisions and execution
 
 Write `decisions.json` as an array with exactly one entry for every snapshot MSID. Each entry contains `recording_msid`, `verdict`, `reason`, and `evidence` pointing to the completed queries and identity sources.
 
 - `link`: acceptable recording identity, with `recording_mbid`.
-- `substitute`: same classical work / movement with another performer, with `recording_mbid` and the substitution rationale.
+- `substitute`: same classical work / movement / arrangement with another performer, with `recording_mbid` and the substitution rationale.
 - `delete`: no acceptable match after recovery and final review, with `search_complete: true`.
 - `skip`: pending failed queries or unfinished research. State what remains unresolved.
 

@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
 from pathlib import Path
 from typing import Any, TextIO
+
+
+def validate_paths(parser: argparse.ArgumentParser, *paths: Path | None) -> None:
+    """Reject artifact paths that resolve to the same file."""
+    resolved = [path.resolve() for path in paths if path is not None]
+    if len(resolved) != len(set(resolved)):
+        parser.error('Input and output artifact paths must be distinct')
 
 
 def require_env(name: str) -> str:
@@ -15,12 +23,14 @@ def require_env(name: str) -> str:
     if not value:
         print(f'{name} not set', file=sys.stderr)
         sys.exit(1)
+
     return value
 
 
 def read_json(path: Path | None) -> Any:
     if path is None:
         return json.load(sys.stdin)
+
     with path.open() as stream:
         return json.load(stream)
 
@@ -45,6 +55,7 @@ def repair_jsonl(path: Path) -> None:
         start = 0
         while line := stream.readline():
             end = stream.tell()
+
             try:
                 json.loads(line)
             except (ValueError, UnicodeDecodeError):
@@ -52,6 +63,7 @@ def repair_jsonl(path: Path) -> None:
                     raise ValueError('Malformed completed JSONL record') from None
                 stream.truncate(start)
                 return
+
             start = end
             if not line.endswith(b'\n'):
                 stream.write(b'\n')

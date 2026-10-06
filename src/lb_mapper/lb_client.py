@@ -48,6 +48,7 @@ class Listen:
     def from_api(cls, data: dict[str, Any]) -> Listen:
         tm = data['track_metadata']
         additional = tm.get('additional_info') or {}
+
         return cls(
             listened_at=data['listened_at'],
             recording_msid=data.get('recording_msid')
@@ -89,6 +90,7 @@ class ListenBrainzClient:
         """
         seen: set[tuple[int, str]] = set()
         page_limit = _API_PAGE_LIMIT
+
         while True:
             params: dict[str, Any] = {'count': page_limit}
             if max_ts is not None:
@@ -125,8 +127,8 @@ class ListenBrainzClient:
             boundary_ts = listens_data[-1]['listened_at']
             seen = {k for k in seen if k[0] == boundary_ts}
 
-            # max_ts is exclusive, so +1 re-requests the boundary second;
-            # the seen set deduplicates entries already yielded.
+            # max_ts is exclusive, so +1 re-requests the boundary second.
+            # The seen set deduplicates entries already yielded.
             max_ts = boundary_ts + 1
 
     def fetch_listens(
@@ -135,11 +137,13 @@ class ListenBrainzClient:
         """Fetch *count* recent listens."""
         if count < 1:
             raise ValueError('count must be positive')
+
         result: list[Listen] = []
         for listen in self.iter_listens(user, max_ts):
             result.append(listen)
             if len(result) >= count:
                 break
+
         return result
 
     def submit_mapping(self, recording_msid: str, recording_mbid: str) -> None:
@@ -178,6 +182,7 @@ class ListenBrainzClient:
             if exc.response.status_code == 404:
                 return None
             raise
+
         mbid: str = resp.json()['mapping']['recording_mbid']
         return mbid
 
@@ -192,6 +197,7 @@ class ListenBrainzClient:
                 params={'count': count, 'max_ts': listened_at + 1},
             )
             items = resp.json()['payload']['listens']
+
             for item in items:
                 listen = Listen.from_api(item)
                 if (listen.listened_at, listen.recording_msid) == (
@@ -199,8 +205,10 @@ class ListenBrainzClient:
                     recording_msid,
                 ):
                     return listen
+
             if len(items) < count or items[-1]['listened_at'] < listened_at:
                 return None
+
         raise RuntimeError('Cannot resolve this occurrence in a saturated page')
 
     def list_exports(self) -> list[dict[str, Any]]:
@@ -228,14 +236,17 @@ class ListenBrainzClient:
             with temporary.open('wb') as stream:
                 for chunk in resp.iter_bytes():
                     stream.write(chunk)
+
         temporary.replace(path)
 
     def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         """Pace requests and retry throttling or transient failures of safe reads."""
         retries_left = _MAX_ATTEMPTS
+
         while True:
             retries_left -= 1
             time.sleep(1.1)
+
             try:
                 resp = self._client.request(method, url, **kwargs)
             except httpx.TransportError:
@@ -243,6 +254,7 @@ class ListenBrainzClient:
                     raise
                 time.sleep(_MAX_ATTEMPTS - retries_left)
                 continue
+
             if resp.status_code == 429 and retries_left > 0:
                 self._sleep_for_reset(resp)
                 continue
@@ -253,6 +265,7 @@ class ListenBrainzClient:
             ):
                 time.sleep(_MAX_ATTEMPTS - retries_left)
                 continue
+
             resp.raise_for_status()
             self._sleep_if_near_limit(resp)
             return resp
@@ -263,6 +276,7 @@ class ListenBrainzClient:
             reset_in = float(resp.headers.get('X-RateLimit-Reset-In', '1'))
         except ValueError:
             reset_in = 1.0
+
         time.sleep(max(reset_in, 0.1))
 
     def _sleep_if_near_limit(self, resp: httpx.Response) -> None:
@@ -270,11 +284,13 @@ class ListenBrainzClient:
         remaining = resp.headers.get('X-RateLimit-Remaining')
         if remaining is None:
             return
+
         try:
             if int(remaining) > 1:
                 return
         except ValueError:
             return
+
         self._sleep_for_reset(resp)
 
     def close(self) -> None:

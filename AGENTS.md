@@ -37,4 +37,4 @@ uv run mypy src/lb_mapper/ --strict
 uv run pre-commit run --all-files
 ```
 
-Commits use `type(scope): description`, following the existing history. Load the shared Git Workflow skill for commits and publication.
+Commits use `type(scope): description`, with an optional scope. Load the shared Git Workflow skill for commits and publication.

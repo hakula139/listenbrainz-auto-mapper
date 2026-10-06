@@ -10,7 +10,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from lb_mapper.cli import require_env, write_json
+from lb_mapper.cli import require_env, validate_paths, write_json
 from lb_mapper.history import iter_export
 from lb_mapper.lb_client import ListenBrainzClient
 from lb_mapper.review import uuid_string
@@ -22,6 +22,8 @@ def main() -> None:
     parser.add_argument('--output', type=Path)
     parser.add_argument('--export', dest='archive', type=Path)
     args = parser.parse_args()
+    validate_paths(parser, args.archive, args.output)
+
     if args.count < 1:
         parser.error('count must be positive')
 
@@ -38,6 +40,7 @@ def main() -> None:
             lb = stack.enter_context(ListenBrainzClient(require_env('LB_TOKEN')))
             lb.validate_token(user)
             listens = lb.iter_listens(user)
+
         for listen in listens:
             total += 1
             if listen.is_linked:
@@ -56,6 +59,7 @@ def main() -> None:
                 )
                 if len(unlinked) >= args.count:
                     break
+
             if total % 1000 == 0:
                 print(
                     f'Scanned {total}, found {len(unlinked)} unlinked',

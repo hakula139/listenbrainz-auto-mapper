@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from contextlib import nullcontext
 from pathlib import Path
@@ -12,7 +11,8 @@ from typing import Any
 import httpx
 
 from lb_mapper import mb_search
-from lb_mapper.cli import read_json, repair_jsonl, write_record
+from lb_mapper.cli import read_json, validate_paths
+from lb_mapper.cli.search_journal import SearchJournal
 from lb_mapper.lb_search import search_recording
 from lb_mapper.review import group_listens, uuid_string
 
@@ -25,22 +25,36 @@ def _query(item: dict[str, Any], source: str) -> str:
     return item.get('query') or mb_search.recording_query(item['artist'], item['track'])
 
 
-def _search_one(item: dict[str, Any], source: str) -> dict[str, Any]:
+def _entry(item: dict[str, Any], source: str) -> dict[str, Any]:
     query = _query(item, source)
     operation = (
         'lookup' if source == 'musicbrainz' and item.get('recording_mbid') else 'search'
     )
-    entry = {**item, 'source': source, 'operation': operation, 'query': query}
+    return {**item, 'source': source, 'operation': operation, 'query': query}
+
+
+def _search_one(item: dict[str, Any], source: str) -> dict[str, Any]:
+    entry = _entry(item, source)
+    query = entry['query']
+
     try:
         if source == 'labs':
             results = search_recording(item['artist'], item['track'])
         elif item.get('recording_mbid'):
             results = [mb_search.lookup_recording(query)]
         else:
-            results = mb_search.search_recordings(query)
+            page = mb_search.search_recordings(query, item.get('offset', 0))
+            results = page['recordings']
+            entry.update(result_count=page['count'], result_offset=page['offset'])
+
+            next_offset = page['offset'] + len(results)
+            if next_offset < page['count']:
+                entry['next_offset'] = next_offset
+
         entry.update(status='ok', results=results)
     except (httpx.HTTPError, ValueError, KeyError) as exc:
         entry.update(status='error', error=f'{type(exc).__name__}: {exc}')
+
     return entry
 
 
@@ -50,65 +64,39 @@ def main() -> None:
     parser.add_argument('--output', type=Path)
     parser.add_argument('--source', choices=('labs', 'musicbrainz'), default='labs')
     args = parser.parse_args()
+    validate_paths(parser, args.input, args.output)
+
     data = read_json(args.input)
     items = group_listens(data['unlinked']) if isinstance(data, dict) else data
     if not isinstance(items, list):
         parser.error('input must be a listen snapshot or an array of queries')
-    keys = [
-        (
-            item.get('recording_msid'),
-            'lookup'
-            if args.source == 'musicbrainz' and item.get('recording_mbid')
-            else 'search',
-            _query(item, args.source),
-        )
-        for item in items
-    ]
-    completed = set()
-    cached: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    if args.output and args.output.exists():
-        repair_jsonl(args.output)
-        with args.output.open() as stream:
-            for line in stream:
-                row = json.loads(line)
-                if row['source'] == args.source and row['status'] == 'ok':
-                    operation = row.get('operation') or (
-                        'lookup'
-                        if args.source == 'musicbrainz' and row.get('recording_mbid')
-                        else 'search'
-                    )
-                    completed.add((row.get('recording_msid'), operation, row['query']))
-                    cached[operation, row['query']] = row['results']
+
+    entries = [_entry(item, args.source) for item in items]
+    journal = SearchJournal(args.output, args.source)
+
     failed = False
     context = args.output.open('a') if args.output else nullcontext(sys.stdout)
     with context as stream:
-        for i, (item, key) in enumerate(zip(items, keys, strict=True), 1):
-            if key in completed:
+        for i, entry in enumerate(entries, 1):
+            if journal.is_complete(entry):
                 continue
-            cache_key = (key[1], key[2])
-            if cache_key in cached:
-                entry = {
-                    **item,
-                    'source': args.source,
-                    'operation': key[1],
-                    'query': key[2],
-                    'status': 'ok',
-                    'results': cached[cache_key],
-                }
+
+            outcome = journal.cached(entry)
+            if outcome is not None:
+                entry.update(outcome)
             else:
-                entry = _search_one(item, args.source)
-            if entry['status'] == 'ok':
-                completed.add(key)
-                cached[cache_key] = entry['results']
-            write_record(entry, stream)
+                entry = _search_one(entry, args.source)
+
+            journal.record(entry, stream)
             failed |= entry['status'] == 'error'
             print(
-                f'[{i}/{len(items)}] {item.get("artist", "")} / '
-                f'{item.get("track", entry["query"])}: {entry["status"]}, '
+                f'[{i}/{len(items)}] {entry.get("artist", "")} / '
+                f'{entry.get("track", entry["query"])}: {entry["status"]}, '
                 f'{len(entry.get("results", []))} candidates',
                 file=sys.stderr,
                 flush=True,
             )
+
     if failed:
         raise SystemExit(1)
 
