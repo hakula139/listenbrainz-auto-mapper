@@ -51,7 +51,9 @@ For recovery queries, write an array of objects to a JSON file. Each object iden
 uv run python -m lb_mapper.cli.search_batch --source musicbrainz --input "$run/queries.json" --output "$run/musicbrainz.jsonl"
 ```
 
-An object with `recording_mbid` performs a MusicBrainz lookup with artist credits, releases, ISRCs, and work relationships. One process owns MusicBrainz requests during a run. The client spaces requests by 1.1 seconds and resolves merged recording identifiers to their surviving ID. Search records retain `result_count`, `result_offset`, and `next_offset` when further results exist. Narrow a broad query or request another page using its `offset` before concluding that no acceptable candidate exists.
+An object with `recording_mbid` performs a MusicBrainz lookup with artist credits, releases, ISRCs, and work relationships. One process owns MusicBrainz requests during a run. The client spaces requests by 1.1 seconds and resolves merged recording identifiers to their surviving ID. Use supported recording-index fields such as `recording`, `artist`, `artistname`, `release`, `isrc`, and `comment`. The recording index has no `composer` or `work` field. Search catalog and movement tokens in `recording`, then inspect work relationships to establish composer identity. An unsupported field returning zero results does not support deletion. See [MusicBrainz search fields](https://musicbrainz.org/doc/MusicBrainz_API/Search).
+
+Search records retain `result_count`, `result_offset`, and `next_offset` when further results exist. Narrow a broad query or request another page using its `offset` before concluding that no acceptable candidate exists.
 
 ## Finding an acceptable match
 
@@ -95,6 +97,6 @@ uv run python -m lb_mapper.cli.execute --input "$run/actions.json" --apply --out
 uv run python -m lb_mapper.cli.verify --input "$run/actions.json" --output "$run/verification.jsonl"
 ```
 
-Only the `--apply` command mutates the account. It checks the token owner, rejects conflicting actions, confirms mappings through readback, and rechecks listen / mapping state before scheduling deletions. Re-review conflicts or unexpected state changes. After an ambiguous network failure, inspect account state before retrying.
+Only the `--apply` command mutates the account. It checks the token owner, rejects conflicting actions, confirms mappings through readback, and rechecks listen / mapping state before scheduling deletions. Re-review conflicts or unexpected state changes. An HTTP failure stops the batch and preserves the failed result. After an ambiguous network failure, inspect account state before retrying.
 
 Report mapped MSIDs, affected occurrences, substitutions, pending research, errors, and deletion states separately. `scheduled` means ListenBrainz accepted a deletion request. Report a listen as deleted only after verification returns `absent`. Verification exits 2 while deletions remain pending, and 1 on errors or mismatched mappings.
