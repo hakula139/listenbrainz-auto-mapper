@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 from uuid import UUID
 
@@ -83,6 +84,27 @@ def group_listens(listens: list[dict[str, Any]]) -> list[dict[str, Any]]:
         groups[msid]['listens'].append(listen)
 
     return list(groups.values())
+
+
+def validate_recording_lookups(
+    actions: dict[str, Any], records: Iterable[dict[str, Any]]
+) -> None:
+    """Require a successful canonical lookup for each selected MSID and target."""
+    confirmed = {
+        (uuid_string(record['recording_msid']), uuid_string(candidate['id']))
+        for record in records
+        if record['source'] == 'musicbrainz'
+        and record['status'] == 'ok'
+        and record.get('operation') == 'lookup'
+        for candidate in record['results']
+    }
+
+    for mapping in actions['mappings']:
+        identity = (mapping['recording_msid'], mapping['recording_mbid'])
+        if identity not in confirmed:
+            raise ValueError(
+                f'Mapping target lacks a successful canonical lookup: {identity}'
+            )
 
 
 def prepare_actions(

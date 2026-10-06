@@ -51,7 +51,7 @@ For recovery queries, write an array of objects to a JSON file. Each object iden
 uv run python -m lb_mapper.cli.search_batch --source musicbrainz --input "$run/queries.json" --output "$run/musicbrainz.jsonl"
 ```
 
-An object with `recording_mbid` performs a MusicBrainz lookup with artist credits, releases, ISRCs, and work relationships. Copy target MBIDs from returned records and confirm every selected target with a successful canonical recording lookup before preparing actions. One process owns MusicBrainz requests during a run. The client spaces requests by 1.1 seconds and resolves merged recording identifiers to their surviving ID. Use supported recording-index fields such as `recording`, `artist`, `artistname`, `release`, `isrc`, and `comment`. The recording index has no `composer` or `work` field. Search catalog and movement tokens in `recording`, then inspect work relationships to establish composer identity. An unsupported field returning zero results does not support deletion. See [MusicBrainz search fields](https://musicbrainz.org/doc/MusicBrainz_API/Search).
+An object with `recording_mbid` performs a MusicBrainz lookup with artist credits, releases, ISRCs, and work relationships. Copy target MBIDs from returned records and confirm every selected target with a successful canonical recording lookup before preparing actions. Preparation checks the selected MSID / target pairs against this MusicBrainz JSONL journal. One process owns MusicBrainz requests during a run. The client spaces requests by 1.1 seconds and resolves merged recording identifiers to their surviving ID. Use supported recording-index fields such as `recording`, `artist`, `artistname`, `release`, `isrc`, and `comment`. The recording index has no `composer` or `work` field. Search catalog and movement tokens in `recording`, then inspect work relationships to establish composer identity. An unsupported field returning zero results does not support deletion. See [MusicBrainz search fields](https://musicbrainz.org/doc/MusicBrainz_API/Search).
 
 Search records retain `result_count`, `result_offset`, and `next_offset` when further results exist. Narrow a broad query or request another page using its `offset` before concluding that no acceptable candidate exists.
 
@@ -67,6 +67,7 @@ Search original metadata first. Treat fuzzy hits as candidates whose identity st
 For unresolved items, use the recovery angles justified by their metadata:
 
 - Verified native-script names, canonical romanizations, and localized titles in both directions. Preserve catalog information and mixed-script title segments.
+- Base titles without storefront album, film, or feature-credit suffixes. Keep version distinctions in the identity review even when simplifying the search query.
 - Simplified multi-artist credits and featured-artist variants. Verify the full credit after retrieval.
 - Direct MusicBrainz queries with distinctive title tokens, release context, ISRC, or classical catalog / movement identifiers. Broaden classical searches to other performers before declaring failure.
 - Web research on MusicBrainz, the source album page, artist discography, or publisher catalog to resolve naming and work identity.
@@ -93,7 +94,7 @@ After a mapping conflict, look up the existing recording ID and review its canon
 Reconcile all groups against the snapshot. Resolve conflicting choices for one MSID and check that every occurrence is covered. Evaluate the strongest candidates beyond an arbitrary top-five cutoff when later results provide better evidence. Final review must examine the actual candidates and sources, including proposed links, rather than merely accepting another agent's verdict.
 
 ```bash
-uv run python -m lb_mapper.cli.prepare "$run/listens.json" "$run/decisions.json" --output "$run/actions.json"
+uv run python -m lb_mapper.cli.prepare "$run/listens.json" "$run/decisions.json" --recordings "$run/musicbrainz.jsonl" --output "$run/actions.json"
 uv run python -m lb_mapper.cli.execute --input "$run/actions.json"
 uv run python -m lb_mapper.cli.execute --input "$run/actions.json" --apply --output "$run/execution.jsonl"
 uv run python -m lb_mapper.cli.verify --input "$run/actions.json" --output "$run/verification.jsonl"

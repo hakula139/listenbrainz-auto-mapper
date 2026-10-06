@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from lb_mapper.review import group_listens, prepare_actions
+from lb_mapper.review import group_listens, prepare_actions, validate_recording_lookups
 from tests.fixtures import (
     MBID,
     MSID,
@@ -16,6 +16,34 @@ from tests.fixtures import (
 
 
 class ReviewTests(unittest.TestCase):
+    def test_selected_target_requires_a_successful_canonical_lookup(self):
+        actions = {
+            'mappings': [{'recording_msid': MSID, 'recording_mbid': MBID}],
+        }
+        lookup = {
+            'source': 'musicbrainz',
+            'operation': 'lookup',
+            'recording_msid': MSID,
+            'recording_mbid': OTHER_MBID,
+            'status': 'ok',
+            'results': [{'id': MBID}],
+        }
+        validate_recording_lookups(actions, iter([lookup]))
+
+        for records in (
+            [],
+            [{**lookup, 'status': 'error'}],
+            [{**lookup, 'operation': 'search'}],
+            [{**lookup, 'source': 'labs'}],
+            [{**lookup, 'recording_msid': OTHER_MSID}],
+            [{**lookup, 'results': [{'id': OTHER_MBID}]}],
+        ):
+            with (
+                self.subTest(records=records),
+                self.assertRaisesRegex(ValueError, 'canonical lookup'),
+            ):
+                validate_recording_lookups(actions, iter(records))
+
     def test_reviewed_previous_mapping_is_validated_and_preserved(self):
         snapshot = {'user': 'user', 'unlinked': [occurrence()]}
         decision = {
