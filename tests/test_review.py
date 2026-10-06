@@ -8,6 +8,7 @@ from lb_mapper.review import group_listens, prepare_actions
 from tests.fixtures import (
     MBID,
     MSID,
+    OTHER_MBID,
     OTHER_MSID,
     TIMESTAMP,
     occurrence,
@@ -15,6 +16,31 @@ from tests.fixtures import (
 
 
 class ReviewTests(unittest.TestCase):
+    def test_reviewed_previous_mapping_is_validated_and_preserved(self):
+        snapshot = {'user': 'user', 'unlinked': [occurrence()]}
+        decision = {
+            'recording_msid': MSID,
+            'verdict': 'link',
+            'recording_mbid': MBID,
+            'previous_recording_mbid': OTHER_MBID,
+            'reason': 'The previous ID redirects to the reviewed canonical recording',
+            'evidence': ['Canonical lookup of the previous recording ID'],
+        }
+        self.assertEqual(
+            prepare_actions(snapshot, [decision])['mappings'],
+            [
+                {
+                    'recording_msid': MSID,
+                    'recording_mbid': MBID,
+                    'previous_recording_mbid': OTHER_MBID,
+                }
+            ],
+        )
+
+        decision['previous_recording_mbid'] = 'invalid'
+        with self.assertRaises(ValueError):
+            prepare_actions(snapshot, [decision])
+
     def test_repeated_msid_has_one_mapping_and_preserves_occurrences(self):
         snapshot = {
             'user': 'user',

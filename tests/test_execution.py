@@ -69,6 +69,37 @@ class ExecutionTests(unittest.TestCase):
                 {'user': 'user', 'mappings': [item], 'deletions': [occurrence()]}
             )
 
+        with self.assertRaisesRegex(ValueError, 'Conflicting'):
+            validate_actions(
+                {
+                    'user': 'user',
+                    'mappings': [
+                        item,
+                        {**item, 'previous_recording_mbid': OTHER_MBID},
+                    ],
+                }
+            )
+
+    def test_reviewed_replacement_rechecks_current_mapping(self):
+        lb = Mock()
+        item = {
+            'recording_msid': MSID,
+            'recording_mbid': MBID,
+            'previous_recording_mbid': OTHER_MBID,
+        }
+        for current in (OTHER_MBID, None):
+            with self.subTest(current=current):
+                lb.reset_mock(side_effect=True)
+                lb.get_manual_mapping.side_effect = [current, MBID]
+                self.assertEqual(execute.apply_mapping(lb, item), 'mapped')
+                lb.submit_mapping.assert_called_once_with(MSID, MBID)
+
+        lb.reset_mock(side_effect=True)
+        lb.get_manual_mapping.return_value = OTHER_MSID
+        with self.assertRaisesRegex(ValueError, 'different manual mapping'):
+            execute.apply_mapping(lb, item)
+        lb.submit_mapping.assert_not_called()
+
     def test_mapping_readback_and_existing_conflict(self):
         lb = Mock()
         item = {'recording_msid': MSID, 'recording_mbid': MBID}

@@ -27,7 +27,7 @@ def apply_mapping(lb: ListenBrainzClient, item: dict[str, Any]) -> str:
     current = lb.get_manual_mapping(item['recording_msid'])
     if current == item['recording_mbid']:
         return 'unchanged'
-    if current is not None:
+    if current is not None and current != item.get('previous_recording_mbid'):
         raise ValueError('A different manual mapping exists. Re-review this MSID')
 
     lb.submit_mapping(item['recording_msid'], item['recording_mbid'])

@@ -19,7 +19,7 @@ def validate_actions(data: Any) -> dict[str, Any]:
     if not data['user'].strip():
         raise ValueError('Action plan user must not be empty')
 
-    mappings: dict[str, str] = {}
+    mappings: dict[str, dict[str, str]] = {}
     deletions: dict[tuple[int, str], dict[str, Any]] = {}
 
     for key in ('mappings', 'deletions'):
@@ -33,11 +33,19 @@ def validate_actions(data: Any) -> dict[str, Any]:
 
             msid = uuid_string(item['recording_msid'])
             if key == 'mappings':
-                mbid = uuid_string(item['recording_mbid'])
-                if msid in mappings and mappings[msid] != mbid:
+                mapping = {
+                    'recording_msid': msid,
+                    'recording_mbid': uuid_string(item['recording_mbid']),
+                }
+                if 'previous_recording_mbid' in item:
+                    mapping['previous_recording_mbid'] = uuid_string(
+                        item['previous_recording_mbid']
+                    )
+
+                if msid in mappings and mappings[msid] != mapping:
                     raise ValueError('Conflicting mappings for one MSID')
 
-                mappings[msid] = mbid
+                mappings[msid] = mapping
             else:
                 timestamp = item['listened_at']
                 if type(timestamp) is not int or timestamp < 1033410600:
@@ -53,10 +61,7 @@ def validate_actions(data: Any) -> dict[str, Any]:
 
     return {
         'user': data['user'],
-        'mappings': [
-            {'recording_msid': msid, 'recording_mbid': mbid}
-            for msid, mbid in mappings.items()
-        ],
+        'mappings': list(mappings.values()),
         'deletions': list(deletions.values()),
     }
 
@@ -100,12 +105,14 @@ def prepare_actions(
 
         verdict = decision['verdict']
         if verdict in ('link', 'substitute'):
-            mappings.append(
-                {
-                    'recording_msid': msid,
-                    'recording_mbid': uuid_string(decision['recording_mbid']),
-                }
-            )
+            mapping = {
+                'recording_msid': msid,
+                'recording_mbid': decision['recording_mbid'],
+            }
+            if 'previous_recording_mbid' in decision:
+                mapping['previous_recording_mbid'] = decision['previous_recording_mbid']
+
+            mappings.append(mapping)
         elif verdict == 'delete':
             if decision.get('search_complete') is not True:
                 raise ValueError(

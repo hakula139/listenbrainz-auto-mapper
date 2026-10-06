@@ -88,6 +88,8 @@ Write `decisions.json` as an array with exactly one entry for every snapshot MSI
 - `delete`: no acceptable match after recovery and final review, with `search_complete: true`.
 - `skip`: pending failed queries or unfinished research. State what remains unresolved.
 
+After a mapping conflict, look up the existing recording ID and review its canonical identity. To replace an existing mapping after that review, include `previous_recording_mbid` in the decision. Execution permits replacement of that observed ID. An absent mapping is created normally, and the new mapping is confirmed through readback. Another existing mapping remains a conflict.
+
 Reconcile all groups against the snapshot. Resolve conflicting choices for one MSID and check that every occurrence is covered. Evaluate the strongest candidates beyond an arbitrary top-five cutoff when later results provide better evidence. Final review must examine the actual candidates and sources, including proposed links, rather than merely accepting another agent's verdict.
 
 ```bash
