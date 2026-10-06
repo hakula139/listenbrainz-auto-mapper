@@ -11,9 +11,9 @@ repos:
     hooks:
       - id: mypy
         name: mypy
-        entry: uv run --locked mypy src/lb_mapper/ tests/ --strict
+        entry: uv run --locked mypy
         language: system
-        files: ^(src/lb_mapper|tests)/.*\.pyi?$
+        types_or: [python, pyi]
         pass_filenames: false
 
       - id: ruff-check

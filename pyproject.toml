@@ -45,4 +45,6 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 
 [tool.mypy]
+files = ["."]
+exclude_gitignore = true
 strict = true
