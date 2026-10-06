@@ -94,6 +94,7 @@ def _execute(
     ):
         for i, item in enumerate(items, 1):
             record = {'action': action, **item}
+            request_failed = False
 
             try:
                 record['status'] = (
@@ -103,6 +104,7 @@ def _execute(
                 )
             except (httpx.HTTPError, ValueError, RuntimeError) as exc:
                 failed = True
+                request_failed = isinstance(exc, httpx.HTTPError)
                 record.update(status='error', error=f'{type(exc).__name__}: {exc}')
 
             write_record(record, stream)
@@ -111,6 +113,9 @@ def _execute(
                 file=sys.stderr,
                 flush=True,
             )
+
+            if request_failed:
+                raise SystemExit(1)
 
     if failed:
         raise SystemExit(1)

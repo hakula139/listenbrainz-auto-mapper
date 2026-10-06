@@ -98,7 +98,11 @@ class ExecutionTests(unittest.TestCase):
     def test_batch_failure_returns_nonzero_and_keeps_result_record(self):
         data = {
             'user': 'user',
-            'mappings': [{'recording_msid': MSID, 'recording_mbid': MBID}],
+            'mappings': [
+                {'recording_msid': MSID, 'recording_mbid': MBID},
+                {'recording_msid': OTHER_MSID, 'recording_mbid': OTHER_MBID},
+            ],
+            'deletions': [occurrence(msid=OTHER_MBID)],
         }
         with (
             patch('sys.argv', ['execute', '--apply']),
@@ -107,7 +111,8 @@ class ExecutionTests(unittest.TestCase):
             patch.object(execute, 'ListenBrainzClient'),
             patch.object(
                 execute, 'apply_mapping', side_effect=httpx.ConnectError('offline')
-            ),
+            ) as mapping,
+            patch.object(execute, 'apply_deletion') as deletion,
         ):
             output = io.StringIO()
             with redirect_stdout(output), self.assertRaises(SystemExit) as exc:
@@ -116,6 +121,8 @@ class ExecutionTests(unittest.TestCase):
         row = json.loads(output.getvalue())
         self.assertEqual(row['status'], 'error')
         self.assertEqual(row['recording_msid'], MSID)
+        mapping.assert_called_once()
+        deletion.assert_not_called()
 
 
 class CLITests(unittest.TestCase):
