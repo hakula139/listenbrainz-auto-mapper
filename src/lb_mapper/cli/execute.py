@@ -6,7 +6,7 @@ import argparse
 import sys
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, TextIO, cast
 
 import httpx
 from dotenv import load_dotenv
@@ -19,33 +19,12 @@ from lb_mapper.cli import (
     write_json,
     write_record,
 )
+from lb_mapper.execution import (
+    apply_deletion as apply_deletion,
+    apply_mapping as apply_mapping,
+)
 from lb_mapper.lb_client import ListenBrainzClient
-from lb_mapper.review import validate_actions
-
-
-def apply_mapping(lb: ListenBrainzClient, item: dict[str, Any]) -> str:
-    current = lb.get_manual_mapping(item['recording_msid'])
-    if current == item['recording_mbid']:
-        return 'unchanged'
-    if current is not None and current != item.get('previous_recording_mbid'):
-        raise ValueError('A different manual mapping exists. Re-review this MSID')
-
-    lb.submit_mapping(item['recording_msid'], item['recording_mbid'])
-    if lb.get_manual_mapping(item['recording_msid']) != item['recording_mbid']:
-        raise RuntimeError('Submitted mapping has not been confirmed by readback')
-
-    return 'mapped'
-
-
-def apply_deletion(lb: ListenBrainzClient, user: str, item: dict[str, Any]) -> str:
-    listen = lb.get_listen(user, item['listened_at'], item['recording_msid'])
-    if listen is None:
-        return 'absent'
-    if listen.is_linked or lb.get_manual_mapping(item['recording_msid']) is not None:
-        raise ValueError('Listen is now linked. Re-review before deleting it')
-
-    lb.delete_listen(item['listened_at'], item['recording_msid'])
-    return 'scheduled'
+from lb_mapper.review import ActionPlan, DeletionAction, MappingAction, validate_actions
 
 
 def main() -> None:
@@ -84,7 +63,7 @@ def main() -> None:
 
 
 def _execute(
-    lb: ListenBrainzClient, user: str, data: dict[str, Any], stream: TextIO
+    lb: ListenBrainzClient, user: str, data: ActionPlan, stream: TextIO
 ) -> None:
     failed = False
 
@@ -93,14 +72,14 @@ def _execute(
         ('deletion', data['deletions']),
     ):
         for i, item in enumerate(items, 1):
-            record = {'action': action, **item}
+            record: dict[str, Any] = {'action': action, **item}
             request_failed = False
 
             try:
                 record['status'] = (
-                    apply_mapping(lb, item)
+                    apply_mapping(lb, cast(MappingAction, item))
                     if action == 'mapping'
-                    else apply_deletion(lb, user, item)
+                    else apply_deletion(lb, user, cast(DeletionAction, item))
                 )
             except (httpx.HTTPError, ValueError, RuntimeError) as exc:
                 failed = True

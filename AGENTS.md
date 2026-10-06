@@ -11,6 +11,8 @@ The shared `map-listens` skill owns matching judgment, research, final review, a
 - `mb_search.py` owns MusicBrainz search and recording lookup. A single process must own MusicBrainz calls during a run to respect its shared rate limit.
 - `history.py` reads enriched history exports newest first.
 - `review.py` groups occurrences by MSID and requires complete decisions before preparing actions.
+- `execution.py` applies and verifies reviewed actions against current account state.
+- `artifacts.py` owns atomic snapshots and append-only evidence files.
 - `cli/` communicates using JSON snapshots and JSONL search / execution records. Progress goes to stderr.
 
 A recording MSID can occur many times. A mapping applies to that MSID, while deletion targets an individual `(listened_at, recording_msid)` occurrence. Preserve submitted metadata when linking.

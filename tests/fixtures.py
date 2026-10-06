@@ -26,3 +26,15 @@ def occurrence(timestamp: int | str = TIMESTAMP, msid: str = MSID) -> dict:
         'track': 'Title',
         'release': 'Release',
     }
+
+
+def recording(mbid: str = MBID) -> dict:
+    return {
+        'id': mbid,
+        'title': 'Title',
+        'video': False,
+        'artist-credit': [{'name': 'Artist'}],
+        'releases': [],
+        'isrcs': [],
+        'relations': [],
+    }

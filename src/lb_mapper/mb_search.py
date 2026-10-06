@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from lb_mapper import USER_AGENT
+from lb_mapper.validation import uuid_string
 
 
 _MAX_ATTEMPTS = 3
@@ -57,10 +58,15 @@ def _request(path: str, **params: str | int) -> tuple[httpx.Response, dict[str, 
             raise httpx.TooManyRedirects(
                 'MusicBrainz redirect limit exceeded', request=request
             )
-        if resp.next_request.url.host != client.base_url.host:
+        if (
+            resp.next_request.url.host != client.base_url.host
+            or resp.next_request.url.scheme != client.base_url.scheme
+        ):
             raise ValueError('MusicBrainz redirect leaves the recording service')
 
-        request = resp.next_request
+        request = client.build_request(
+            'GET', resp.next_request.url.copy_merge_params({'fmt': 'json', **params})
+        )
         redirects += 1
         failures = 0
 
@@ -88,13 +94,49 @@ def search_recordings(query: str, offset: int = 0) -> dict[str, Any]:
         raise ValueError('MusicBrainz offset must be a non-negative integer')
 
     _, data = _request('/recording/', query=query, limit=100, offset=offset)
-    results: Any = data['recordings']
+    results: Any = data.get('recordings')
     if not isinstance(results, list) or any(
         not isinstance(item, dict) or not item.get('id') for item in results
     ):
         raise ValueError('MusicBrainz returned malformed recording candidates')
-    if type(data['count']) is not int or data['offset'] != offset:
+    for item in results:
+        uuid_string(item['id'])
+    count = data.get('count')
+    if (
+        type(count) is not int
+        or count < 0
+        or type(data.get('offset')) is not int
+        or data['offset'] != offset
+        or (results and offset + len(results) > count)
+        or (not results and offset < count)
+    ):
         raise ValueError('MusicBrainz returned malformed pagination metadata')
+
+    return data
+
+
+def validate_recording(data: Any) -> dict[str, Any]:
+    """Require canonical identity and the requested metadata containers."""
+    if not isinstance(data, dict):
+        raise ValueError('MusicBrainz recording must be an object')
+
+    uuid_string(data.get('id'))
+    if not isinstance(data.get('title'), str) or not data['title'].strip():
+        raise ValueError('MusicBrainz recording requires a title')
+    if type(data.get('video')) is not bool:
+        raise ValueError('MusicBrainz recording requires its video flag')
+
+    for key in ('artist-credit', 'releases', 'isrcs', 'relations'):
+        if not isinstance(data.get(key), list):
+            raise ValueError(f'MusicBrainz recording requires {key} metadata')
+
+    if not data['artist-credit'] or any(
+        not isinstance(credit, dict)
+        or not isinstance(credit.get('name'), str)
+        or not credit['name'].strip()
+        for credit in data['artist-credit']
+    ):
+        raise ValueError('MusicBrainz returned malformed recording credits')
 
     return data
 
@@ -102,8 +144,9 @@ def search_recordings(query: str, offset: int = 0) -> dict[str, Any]:
 def lookup_recording(mbid: str) -> dict[str, Any]:
     """Fetch artist credits, releases, ISRCs, and work relationships."""
     resp, data = _request(
-        f'/recording/{mbid}', inc='artist-credits+releases+isrcs+work-rels'
+        f'/recording/{uuid_string(mbid)}', inc='artist-credits+releases+isrcs+work-rels'
     )
+    validate_recording(data)
     canonical_mbid = resp.url.path.rstrip('/').rsplit('/', 1)[-1]
     if data['id'] != canonical_mbid:
         raise ValueError('MusicBrainz returned a different recording ID')

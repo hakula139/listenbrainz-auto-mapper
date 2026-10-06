@@ -6,12 +6,15 @@ import time
 import types
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from lb_mapper import USER_AGENT
+from lb_mapper.artifacts import atomic_path
+from lb_mapper.validation import uuid_string
 
 
 __all__ = ['Listen', 'ListenBrainzClient']
@@ -46,17 +49,46 @@ class Listen:
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> Listen:
-        tm = data['track_metadata']
-        additional = tm.get('additional_info') or {}
+        if not isinstance(data, dict):
+            raise ValueError('ListenBrainz listen must be an object')
+
+        tm = data.get('track_metadata')
+        timestamp = data.get('listened_at')
+        if not isinstance(tm, dict) or type(timestamp) is not int or timestamp < 0:
+            raise ValueError('ListenBrainz returned malformed listen metadata')
+
+        for key in ('artist_name', 'track_name'):
+            if not isinstance(tm.get(key), str) or not tm[key].strip():
+                raise ValueError(f'ListenBrainz listen requires {key}')
+
+        release = tm.get('release_name')
+        if release is not None and not isinstance(release, str):
+            raise ValueError('ListenBrainz release_name must be a string or null')
+
+        additional = tm.get('additional_info')
+        mapping = tm.get('mbid_mapping')
+        if additional is None:
+            additional = {}
+        if not isinstance(additional, dict) or (
+            mapping is not None and not isinstance(mapping, dict)
+        ):
+            raise ValueError('ListenBrainz returned malformed mapping metadata')
+
+        for metadata in (additional, mapping or {}):
+            if metadata.get('recording_mbid') is not None:
+                uuid_string(metadata['recording_mbid'])
+
+        msid = data.get('recording_msid') or additional.get('recording_msid', '')
+        if msid:
+            msid = uuid_string(msid)
 
         return cls(
-            listened_at=data['listened_at'],
-            recording_msid=data.get('recording_msid')
-            or additional.get('recording_msid', ''),
-            artist_name=tm.get('artist_name', ''),
-            track_name=tm.get('track_name', ''),
-            release_name=tm.get('release_name') or '',
-            mbid_mapping=tm.get('mbid_mapping'),
+            listened_at=timestamp,
+            recording_msid=msid,
+            artist_name=tm['artist_name'],
+            track_name=tm['track_name'],
+            release_name=release or '',
+            mbid_mapping=mapping,
             additional_info=additional,
         )
 
@@ -96,21 +128,19 @@ class ListenBrainzClient:
             if max_ts is not None:
                 params['max_ts'] = max_ts
 
-            resp = self._request('GET', f'/1/user/{user}/listens', params=params)
-            listens_data = resp.json()['payload']['listens']
-            if not listens_data:
+            listens = self._listen_page(user, **params)
+            if not listens:
                 return
 
             added = False
-            for item in listens_data:
-                listen = Listen.from_api(item)
+            for listen in listens:
                 key = (listen.listened_at, listen.recording_msid)
                 if key not in seen:
                     seen.add(key)
                     yield listen
                     added = True
 
-            if len(listens_data) < page_limit:
+            if len(listens) < page_limit:
                 return
 
             if not added:
@@ -124,7 +154,7 @@ class ListenBrainzClient:
 
             # Prune: only entries at the boundary timestamp can reappear
             # on the next page, so discard the rest to bound memory usage.
-            boundary_ts = listens_data[-1]['listened_at']
+            boundary_ts = listens[-1].listened_at
             seen = {k for k in seen if k[0] == boundary_ts}
 
             # max_ts is exclusive, so +1 re-requests the boundary second.
@@ -168,7 +198,9 @@ class ListenBrainzClient:
 
     def validate_token(self, user: str) -> None:
         data = self._request('GET', '/1/validate-token').json()
-        if not data['valid'] or data['user_name'] != user:
+        if not isinstance(data, dict) or type(data.get('valid')) is not bool:
+            raise ValueError('ListenBrainz returned malformed token validation')
+        if not data['valid'] or data.get('user_name') != user:
             raise ValueError('LB_TOKEN does not belong to the requested LB_USER')
 
     def get_manual_mapping(self, recording_msid: str) -> str | None:
@@ -183,30 +215,48 @@ class ListenBrainzClient:
                 return None
             raise
 
-        mbid: str = resp.json()['mapping']['recording_mbid']
-        return mbid
+        data = resp.json()
+        if not isinstance(data, dict) or not isinstance(data.get('mapping'), dict):
+            raise ValueError('ListenBrainz returned malformed manual mapping')
+
+        return uuid_string(data['mapping'].get('recording_mbid'))
+
+    def _listen_page(self, user: str, **params: Any) -> list[Listen]:
+        data = self._request('GET', f'/1/user/{user}/listens', params=params).json()
+        if not isinstance(data, dict) or not isinstance(data.get('payload'), dict):
+            raise ValueError('ListenBrainz returned malformed listen response')
+
+        items = data['payload'].get('listens')
+        if not isinstance(items, list):
+            raise ValueError('ListenBrainz listens must be an array')
+
+        listens = [Listen.from_api(item) for item in items]
+        if any(not listen.recording_msid for listen in listens):
+            raise ValueError('ListenBrainz listen page requires recording MSIDs')
+        if any(a.listened_at < b.listened_at for a, b in pairwise(listens)):
+            raise ValueError('ListenBrainz listens are not newest first')
+        if 'max_ts' in params and any(
+            listen.listened_at >= params['max_ts'] for listen in listens
+        ):
+            raise ValueError('ListenBrainz listen exceeds the requested time boundary')
+
+        return listens
 
     def get_listen(
         self, user: str, listened_at: int, recording_msid: str
     ) -> Listen | None:
         """Find one occurrence, detecting a saturated timestamp page."""
         for count in (100, _MAX_PAGE_LIMIT):
-            resp = self._request(
-                'GET',
-                f'/1/user/{user}/listens',
-                params={'count': count, 'max_ts': listened_at + 1},
-            )
-            items = resp.json()['payload']['listens']
+            listens = self._listen_page(user, count=count, max_ts=listened_at + 1)
 
-            for item in items:
-                listen = Listen.from_api(item)
+            for listen in listens:
                 if (listen.listened_at, listen.recording_msid) == (
                     listened_at,
                     recording_msid,
                 ):
                     return listen
 
-            if len(items) < count or items[-1]['listened_at'] < listened_at:
+            if len(listens) < count or listens[-1].listened_at < listened_at:
                 return None
 
         raise RuntimeError('Cannot resolve this occurrence in a saturated page')
@@ -225,19 +275,19 @@ class ListenBrainzClient:
 
     def download_export(self, export_id: int, path: Path) -> None:
         time.sleep(1.1)
-        temporary = path.with_suffix(path.suffix + '.tmp')
-        with self._client.stream(
-            'GET',
-            f'/1/export/{export_id}/download',
-            timeout=120.0,
-            follow_redirects=True,
-        ) as resp:
+        with (
+            atomic_path(path) as temporary,
+            self._client.stream(
+                'GET',
+                f'/1/export/{export_id}/download',
+                timeout=120.0,
+                follow_redirects=True,
+            ) as resp,
+        ):
             resp.raise_for_status()
             with temporary.open('wb') as stream:
                 for chunk in resp.iter_bytes():
                     stream.write(chunk)
-
-        temporary.replace(path)
 
     def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         """Pace requests and retry throttling or transient failures of safe reads."""

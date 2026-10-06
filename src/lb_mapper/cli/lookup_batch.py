@@ -12,18 +12,23 @@ from typing import Any
 
 import httpx
 
-from lb_mapper.cli import read_json, validate_paths
+from lb_mapper.cli import validate_paths
+from lb_mapper.cli.search_input import artist_title, read_items
 from lb_mapper.cli.search_journal import SearchJournal
 from lb_mapper.lb_search import lookup_recordings
-from lb_mapper.review import group_listens
+from lb_mapper.validation import uuid_string
 
 
 def _entry(item: dict[str, Any]) -> dict[str, Any]:
+    pair = artist_title(item)
+    if 'recording_msid' in item:
+        uuid_string(item['recording_msid'])
+
     return {
         **item,
         'source': 'labs-exact',
         'operation': 'lookup',
-        'query': json.dumps((item['artist'], item['track']), ensure_ascii=False),
+        'query': json.dumps(pair, ensure_ascii=False),
     }
 
 
@@ -34,25 +39,25 @@ def main() -> None:
     args = parser.parse_args()
     validate_paths(parser, args.input, args.output)
 
-    data = read_json(args.input)
-    items = group_listens(data['unlinked']) if isinstance(data, dict) else data
-    if not isinstance(items, list):
-        parser.error('input must be a listen snapshot or an array of queries')
+    try:
+        items = read_items(args.input)
+        entries = [_entry(item) for item in items]
+    except (KeyError, TypeError, ValueError) as exc:
+        parser.error(f'Invalid lookup input: {exc}')
 
     journal = SearchJournal(args.output, 'labs-exact')
     cached: dict[tuple[str, str], list[dict[str, Any]]] = {}
 
     queries: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for item in items:
-        pair = (item['artist'], item['track'])
-        entry = _entry(item)
+    for entry in entries:
+        pair = (entry['artist'], entry['track'])
         if journal.is_complete(entry):
             continue
 
         outcome = journal.cached(entry)
         if outcome is not None:
             cached[pair] = outcome['results']
-        queries.setdefault(pair, []).append(item)
+        queries.setdefault(pair, []).append(entry)
 
     failed = False
     context = args.output.open('a') if args.output else nullcontext(sys.stdout)

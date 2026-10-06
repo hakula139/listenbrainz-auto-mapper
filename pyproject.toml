@@ -17,6 +17,7 @@ packages = ["src/lb_mapper"]
 
 [dependency-groups]
 dev = [
+    "bandit>=1.9.4",
     "mypy>=2.4.0",
     "pre-commit>=4.6.2",
     "ruff>=0.16.10",

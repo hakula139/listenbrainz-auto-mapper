@@ -6,7 +6,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
@@ -23,10 +23,38 @@ from tests.fixtures import (
     MSID,
     OTHER_MBID,
     OTHER_MSID,
+    recording,
 )
 
 
 class SearchTests(unittest.TestCase):
+    def test_invalid_late_bulk_input_preserves_journal_before_lookup(self):
+        for changes in ({'track': None}, {'artist': []}, {'recording_msid': 'invalid'}):
+            with (
+                self.subTest(changes=changes),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                path = Path(directory) / 'queries.json'
+                output = Path(directory) / 'results.jsonl'
+                valid = {'recording_msid': MSID, 'artist': 'A', 'track': 'B'}
+                path.write_text(json.dumps([valid, {**valid, **changes}]))
+                output.write_text('existing journal')
+
+                with (
+                    patch(
+                        'sys.argv',
+                        ['lookup', '--input', str(path), '--output', str(output)],
+                    ),
+                    patch.object(lookup_batch, 'lookup_recordings') as lookup,
+                    redirect_stderr(io.StringIO()),
+                    self.assertRaises(SystemExit) as failure,
+                ):
+                    lookup_batch.main()
+
+                self.assertEqual(failure.exception.code, 2)
+                self.assertEqual(output.read_text(), 'existing journal')
+                lookup.assert_not_called()
+
     def test_bulk_lookup_routes_unordered_hits_and_preserves_collision_miss(self):
         client = Mock()
         hit = {
@@ -191,7 +219,7 @@ class SearchTests(unittest.TestCase):
             self.assertEqual(
                 request.url.params['inc'], 'artist-credits+releases+isrcs+work-rels'
             )
-            return httpx.Response(200, json={'id': MBID})
+            return httpx.Response(200, json=recording(MBID))
 
         with (
             httpx.Client(
@@ -201,7 +229,7 @@ class SearchTests(unittest.TestCase):
             patch.object(mb_search, '_get_client', return_value=client),
             patch.object(mb_search.time, 'sleep'),
         ):
-            self.assertEqual(mb_search.lookup_recording(MBID), {'id': MBID})
+            self.assertEqual(mb_search.lookup_recording(MBID), recording(MBID))
 
     def test_search_cache_does_not_suppress_recording_lookup(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -239,6 +267,56 @@ class SearchTests(unittest.TestCase):
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_incomplete_historical_lookups_refresh_once_then_resume(self):
+        for legacy_operation in (True, False):
+            with (
+                self.subTest(legacy_operation=legacy_operation),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                path = Path(directory) / 'queries.json'
+                output = Path(directory) / 'results.jsonl'
+                query = {'recording_msid': MSID, 'recording_mbid': MBID}
+                path.write_text(json.dumps([query]))
+                old = {
+                    **query,
+                    'source': 'musicbrainz',
+                    'query': MBID,
+                    'status': 'ok',
+                    'results': [recording()] if legacy_operation else [{'id': MBID}],
+                }
+                if not legacy_operation:
+                    old['operation'] = 'lookup'
+
+                output.write_text(json.dumps(old) + '\n')
+
+                with (
+                    patch(
+                        'sys.argv',
+                        [
+                            'search',
+                            '--source',
+                            'musicbrainz',
+                            '--input',
+                            str(path),
+                            '--output',
+                            str(output),
+                        ],
+                    ),
+                    patch.object(
+                        mb_search, 'lookup_recording', return_value=recording()
+                    ) as lookup,
+                ):
+                    search_batch.main()
+                    lookup.assert_called_once_with(MBID)
+                    lookup.reset_mock()
+                    search_batch.main()
+                    lookup.assert_not_called()
+
+                rows = [json.loads(line) for line in output.read_text().splitlines()]
+                self.assertEqual(rows[0], old)
+                self.assertEqual(rows[1]['results'], [recording()])
+                self.assertEqual(rows[1]['operation'], 'lookup')
+
     def test_merged_recording_lookup_returns_surviving_identifier(self):
         events = []
 
@@ -251,7 +329,10 @@ class RecoveryTests(unittest.TestCase):
                         'Location': f'https://musicbrainz.org/ws/2/recording/{OTHER_MBID}?fmt=json'
                     },
                 )
-            return httpx.Response(200, json={'id': OTHER_MBID})
+            self.assertEqual(
+                request.url.params['inc'], 'artist-credits+releases+isrcs+work-rels'
+            )
+            return httpx.Response(200, json=recording(OTHER_MBID))
 
         with (
             httpx.Client(

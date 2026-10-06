@@ -12,6 +12,7 @@ from tests.fixtures import (
     OTHER_MSID,
     TIMESTAMP,
     occurrence,
+    recording,
 )
 
 
@@ -26,9 +27,13 @@ class ReviewTests(unittest.TestCase):
             'recording_msid': MSID,
             'recording_mbid': OTHER_MBID,
             'status': 'ok',
-            'results': [{'id': MBID}],
+            'results': [recording(MBID)],
         }
         validate_recording_lookups(actions, iter([lookup]))
+
+        partial = {**lookup, 'results': [{'id': MBID}]}
+        unrelated = {**partial, 'recording_msid': OTHER_MSID}
+        validate_recording_lookups(actions, iter([partial, unrelated, lookup]))
 
         for records in (
             [],
@@ -36,7 +41,9 @@ class ReviewTests(unittest.TestCase):
             [{**lookup, 'operation': 'search'}],
             [{**lookup, 'source': 'labs'}],
             [{**lookup, 'recording_msid': OTHER_MSID}],
-            [{**lookup, 'results': [{'id': OTHER_MBID}]}],
+            [{**lookup, 'results': [recording(OTHER_MBID)]}],
+            [partial],
+            [{key: value for key, value in lookup.items() if key != 'operation'}],
         ):
             with (
                 self.subTest(records=records),

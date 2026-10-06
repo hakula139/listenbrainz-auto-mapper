@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from lb_mapper.cli import repair_jsonl, write_record
+from lb_mapper.review import canonical_lookup
 
 
 class SearchJournal:
@@ -34,6 +35,13 @@ class SearchJournal:
             return
 
         key = self._key(row)
+        if (
+            row['source'] == 'musicbrainz'
+            and key[1] == 'lookup'
+            and canonical_lookup(row) is None
+        ):
+            return
+
         if (
             row['source'] == 'musicbrainz'
             and key[1] == 'search'

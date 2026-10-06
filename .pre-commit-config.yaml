@@ -1,5 +1,4 @@
 repos:
-  # Standard pre-commit hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
@@ -8,29 +7,30 @@ repos:
       - id: end-of-file-fixer
       - id: trailing-whitespace
 
-  # Python type checking with mypy
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v2.4.0
+  - repo: local
     hooks:
       - id: mypy
+        name: mypy
+        entry: uv run --locked mypy src/lb_mapper/ --strict
+        language: system
         files: ^src/lb_mapper/.*\.pyi?$
-        additional_dependencies:
-          - httpx
-          - python-dotenv
+        pass_filenames: false
 
-  # Python linting and formatting with ruff
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.10
-    hooks:
       - id: ruff-check
-        args:
-          - --fix
-      - id: ruff-format
+        name: ruff check
+        entry: uv run --locked ruff check --fix
+        language: system
+        types_or: [python, pyi]
 
-  # Python security linting with bandit
-  - repo: https://github.com/pycqa/bandit
-    rev: 1.9.4
-    hooks:
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --locked ruff format
+        language: system
+        types_or: [python, pyi]
+
       - id: bandit
-        additional_dependencies:
-          - bandit[toml]
+        name: bandit
+        entry: uv run --locked bandit -r src/lb_mapper/
+        language: system
+        files: ^src/lb_mapper/.*\.py$
+        pass_filenames: false

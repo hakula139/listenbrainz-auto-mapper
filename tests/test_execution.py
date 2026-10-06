@@ -157,6 +157,62 @@ class ExecutionTests(unittest.TestCase):
 
 
 class CLITests(unittest.TestCase):
+    def test_hardlinked_output_is_rejected_before_account_requests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'actions.json'
+            output = Path(directory) / 'verification.jsonl'
+            source.write_text(json.dumps({'user': 'user'}))
+            output.hardlink_to(source)
+
+            with (
+                patch(
+                    'sys.argv',
+                    ['verify', '--input', str(source), '--output', str(output)],
+                ),
+                patch.object(verify, 'ListenBrainzClient') as client,
+                self.assertRaises(SystemExit) as failure,
+            ):
+                verify.main()
+
+            self.assertEqual(failure.exception.code, 2)
+            self.assertEqual(json.loads(source.read_text()), {'user': 'user'})
+            client.assert_not_called()
+
+    def test_interrupted_verification_appends_observations_without_erasing_history(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'verification.jsonl'
+            previous = {'status': 'verified', 'recording_msid': MSID}
+            output.write_text(json.dumps(previous) + '\n')
+            lb = MagicMock()
+            lb.__enter__.return_value = lb
+            lb.get_manual_mapping.side_effect = [MBID, KeyboardInterrupt()]
+            plan = {
+                'user': 'user',
+                'mappings': [
+                    {'recording_msid': MSID, 'recording_mbid': MBID},
+                    {'recording_msid': OTHER_MSID, 'recording_mbid': OTHER_MBID},
+                ],
+            }
+
+            with (
+                patch('sys.argv', ['verify', '--output', str(output)]),
+                patch('sys.stdin', io.StringIO(json.dumps(plan))),
+                patch.object(verify, 'load_dotenv'),
+                patch.object(verify, 'require_env', side_effect=['user', 'token']),
+                patch.object(verify, 'ListenBrainzClient', return_value=lb),
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                verify.main()
+
+            rows = [json.loads(line) for line in output.read_text().splitlines()]
+            self.assertEqual(rows[0], previous)
+            self.assertEqual(rows[1]['recording_msid'], MSID)
+            self.assertEqual(rows[1]['status'], 'verified')
+            self.assertIn('observed_at', rows[1])
+            self.assertEqual(len(rows), 2)
+
     def test_overlapping_output_rejected_before_plan_is_overwritten(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'actions.json'

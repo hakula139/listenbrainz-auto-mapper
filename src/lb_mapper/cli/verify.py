@@ -5,14 +5,23 @@ from __future__ import annotations
 import argparse
 import sys
 from contextlib import nullcontext
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 from dotenv import load_dotenv
 
-from lb_mapper.cli import read_json, require_env, validate_paths, write_record
+from lb_mapper.cli import (
+    read_json,
+    repair_jsonl,
+    require_env,
+    validate_paths,
+    write_record,
+)
+from lb_mapper.execution import verify_deletion, verify_mapping
 from lb_mapper.lb_client import ListenBrainzClient
-from lb_mapper.review import validate_actions
+from lb_mapper.review import DeletionAction, MappingAction, validate_actions
 
 
 def main() -> None:
@@ -22,7 +31,10 @@ def main() -> None:
     args = parser.parse_args()
     validate_paths(parser, args.input, args.output)
 
-    data = validate_actions(read_json(args.input))
+    try:
+        data = validate_actions(read_json(args.input))
+    except (ValueError, KeyError, TypeError) as exc:
+        parser.error(str(exc))
 
     load_dotenv()
     user = require_env('LB_USER')
@@ -34,7 +46,10 @@ def main() -> None:
 
     with ListenBrainzClient(require_env('LB_TOKEN')) as lb:
         lb.validate_token(user)
-        context = args.output.open('w') if args.output else nullcontext(sys.stdout)
+        if args.output and args.output.exists():
+            repair_jsonl(args.output)
+
+        context = args.output.open('a') if args.output else nullcontext(sys.stdout)
 
         with context as stream:
             for action, items in (
@@ -42,24 +57,21 @@ def main() -> None:
                 ('deletion', data['deletions']),
             ):
                 for item in items:
-                    record = {'action': action, **item}
+                    record: dict[str, Any] = {
+                        'action': action,
+                        **item,
+                        'observed_at': datetime.now(UTC).isoformat(),
+                    }
 
                     try:
                         if action == 'mapping':
-                            mbid = lb.get_manual_mapping(item['recording_msid'])
-                            record['status'] = (
-                                'verified'
-                                if mbid == item['recording_mbid']
-                                else 'mismatch'
-                            )
-                            record['actual_recording_mbid'] = mbid
+                            record.update(verify_mapping(lb, cast(MappingAction, item)))
                             failed |= record['status'] == 'mismatch'
                         else:
-                            listen = lb.get_listen(
-                                user, item['listened_at'], item['recording_msid']
+                            record['status'] = verify_deletion(
+                                lb, user, cast(DeletionAction, item)
                             )
-                            record['status'] = 'absent' if listen is None else 'pending'
-                            pending |= listen is not None
+                            pending |= record['status'] == 'pending'
                     except (httpx.HTTPError, ValueError, RuntimeError) as exc:
                         failed = True
                         record.update(

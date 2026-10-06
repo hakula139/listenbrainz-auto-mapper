@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import io
+import json
 import unittest
-from unittest.mock import patch
+from contextlib import redirect_stdout
+from unittest.mock import MagicMock, patch
 
 import httpx
 
+from lb_mapper.cli import fetch_listens
 from lb_mapper.lb_client import Listen, ListenBrainzClient
 from tests.fixtures import (
     MBID,
@@ -19,6 +23,53 @@ from tests.fixtures import (
 
 
 class CollectionTests(unittest.TestCase):
+    def test_requested_count_skips_linked_and_keeps_repeated_occurrences(self):
+        seen = []
+        rows = [
+            Listen(
+                TIMESTAMP,
+                OTHER_MSID,
+                'Linked',
+                'Track',
+                '',
+                None,
+                {'recording_mbid': MBID},
+            ),
+            Listen(TIMESTAMP - 1, MSID, 'A', 'B', 'Album', None),
+            Listen(TIMESTAMP - 2, MSID, 'A', 'B', 'Album', None),
+            Listen(TIMESTAMP - 3, OTHER_MSID, 'Older', 'Track', '', None),
+        ]
+
+        def history():
+            for row in rows:
+                seen.append(row.listened_at)
+                yield row
+
+        lb = MagicMock()
+        lb.__enter__.return_value = lb
+        lb.iter_listens.return_value = history()
+        output = io.StringIO()
+        with (
+            patch('sys.argv', ['fetch_listens', '2']),
+            patch.object(fetch_listens, 'load_dotenv'),
+            patch.object(fetch_listens, 'require_env', side_effect=['user', 'token']),
+            patch.object(fetch_listens, 'ListenBrainzClient', return_value=lb),
+            redirect_stdout(output),
+        ):
+            fetch_listens.main()
+
+        snapshot = json.loads(output.getvalue())
+        self.assertEqual(seen, [TIMESTAMP, TIMESTAMP - 1, TIMESTAMP - 2])
+        self.assertEqual(snapshot['linked'], 1)
+        self.assertEqual(snapshot['total'], 3)
+        self.assertEqual(
+            [
+                (row['listened_at'], row['recording_msid'])
+                for row in snapshot['unlinked']
+            ],
+            [(TIMESTAMP - 1, MSID), (TIMESTAMP - 2, MSID)],
+        )
+
     def test_timestamp_saturation_expands_page_and_reaches_older_history(self):
         history = [api_listen(TIMESTAMP, i) for i in range(120)]
         history.append(api_listen(TIMESTAMP - 1, 999))
