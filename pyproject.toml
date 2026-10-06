@@ -4,12 +4,12 @@ version = "0.1.0"
 description = "Automatically map unlinked ListenBrainz listens to MusicBrainz recordings"
 requires-python = ">=3.12"
 dependencies = [
-    "httpx>=0.27",
-    "python-dotenv>=1.0",
+    "httpx>=0.28.1",
+    "python-dotenv>=1.2.4",
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.32.4"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
@@ -17,9 +17,9 @@ packages = ["src/lb_mapper"]
 
 [dependency-groups]
 dev = [
-    "mypy>=1.19.1",
-    "pre-commit>=4.5.1",
-    "ruff>=0.15.2",
+    "mypy>=2.4.0",
+    "pre-commit>=4.6.2",
+    "ruff>=0.16.10",
 ]
 
 [tool.ruff]
