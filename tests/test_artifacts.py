@@ -13,11 +13,50 @@ from zipfile import ZipFile
 
 from lb_mapper.cli import repair_jsonl
 from lb_mapper.cli.prepare import main as prepare_main
+from lb_mapper.cli.search_batch import main as search_main
 from lb_mapper.history import iter_export
 from tests.fixtures import MBID, MSID, api_listen, occurrence
 
 
 class ArtifactTests(unittest.TestCase):
+    def test_search_rejects_invalid_queries_before_requests_or_journal_writes(self):
+        for query in ('', '   ', None, 123):
+            with self.subTest(query=query), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / 'queries.json'
+                output = root / 'musicbrainz.jsonl'
+                source.write_text(
+                    json.dumps(
+                        [
+                            {'recording_msid': MSID, 'query': 'recording:"Title"'},
+                            {'recording_msid': MSID, 'query': query},
+                        ]
+                    )
+                )
+                output.write_text('existing journal')
+                argv = [
+                    'search_batch',
+                    '--source',
+                    'musicbrainz',
+                    '--input',
+                    str(source),
+                    '--output',
+                    str(output),
+                ]
+
+                with (
+                    patch('sys.argv', argv),
+                    patch('lb_mapper.cli.search_batch._search_one') as search,
+                    redirect_stderr(StringIO()) as errors,
+                    self.assertRaises(SystemExit) as failure,
+                ):
+                    search_main()
+
+                self.assertEqual(failure.exception.code, 2)
+                self.assertIn('non-empty string', errors.getvalue())
+                self.assertEqual(output.read_text(), 'existing journal')
+                search.assert_not_called()
+
     def test_prepare_requires_canonical_journal_before_writing_plan(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
