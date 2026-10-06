@@ -18,6 +18,18 @@ LB_LABS_URL = 'https://labs.api.listenbrainz.org'
 _MAX_QUERY_LEN = 200
 
 
+@cache
+def _get_client() -> httpx.Client:
+    client = httpx.Client(
+        transport=httpx.HTTPTransport(retries=3),
+        base_url=LB_LABS_URL,
+        headers={'Accept': 'application/json', 'User-Agent': USER_AGENT},
+        timeout=30.0,
+    )
+    atexit.register(client.close)
+    return client
+
+
 def lookup_recordings(
     pairs: list[tuple[str, str]],
 ) -> list[list[dict[str, Any]]]:
@@ -51,18 +63,6 @@ def lookup_recordings(
         results[index].append(row)
 
     return results
-
-
-@cache
-def _get_client() -> httpx.Client:
-    client = httpx.Client(
-        transport=httpx.HTTPTransport(retries=3),
-        base_url=LB_LABS_URL,
-        headers={'Accept': 'application/json', 'User-Agent': USER_AGENT},
-        timeout=30.0,
-    )
-    atexit.register(client.close)
-    return client
 
 
 def search_recording(artist: str, recording: str) -> list[dict[str, Any]]:

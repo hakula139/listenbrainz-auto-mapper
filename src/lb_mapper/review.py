@@ -3,25 +3,38 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
-from uuid import UUID
+from typing import Any, NotRequired, TypedDict
+
+from lb_mapper.mb_search import validate_recording
+from lb_mapper.validation import uuid_string as uuid_string
 
 
-def uuid_string(value: Any) -> str:
-    if not isinstance(value, str):
-        raise ValueError('Identifier must be a UUID string')
-    return str(UUID(value))
+class MappingAction(TypedDict):
+    recording_msid: str
+    recording_mbid: str
+    previous_recording_mbid: NotRequired[str]
 
 
-def validate_actions(data: Any) -> dict[str, Any]:
+class DeletionAction(TypedDict):
+    listened_at: int
+    recording_msid: str
+
+
+class ActionPlan(TypedDict):
+    user: str
+    mappings: list[MappingAction]
+    deletions: list[DeletionAction]
+
+
+def validate_actions(data: Any) -> ActionPlan:
     """Validate the entire batch before any authenticated operation."""
     if not isinstance(data, dict) or not isinstance(data.get('user'), str):
         raise ValueError('Action plan must contain a user')
     if not data['user'].strip():
         raise ValueError('Action plan user must not be empty')
 
-    mappings: dict[str, dict[str, str]] = {}
-    deletions: dict[tuple[int, str], dict[str, Any]] = {}
+    mappings: dict[str, MappingAction] = {}
+    deletions: dict[tuple[int, str], DeletionAction] = {}
 
     for key in ('mappings', 'deletions'):
         items = data.get(key, [])
@@ -34,7 +47,7 @@ def validate_actions(data: Any) -> dict[str, Any]:
 
             msid = uuid_string(item['recording_msid'])
             if key == 'mappings':
-                mapping = {
+                mapping: MappingAction = {
                     'recording_msid': msid,
                     'recording_mbid': uuid_string(item['recording_mbid']),
                 }
@@ -86,17 +99,34 @@ def group_listens(listens: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(groups.values())
 
 
+def canonical_lookup(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Return complete canonical evidence. Historical partial lookups need refresh."""
+    if (
+        record.get('source') != 'musicbrainz'
+        or record.get('status') != 'ok'
+        or record.get('operation') != 'lookup'
+    ):
+        return None
+
+    results = record.get('results')
+    if not isinstance(results, list) or len(results) != 1:
+        return None
+
+    try:
+        return validate_recording(results[0])
+    except ValueError:
+        return None
+
+
 def validate_recording_lookups(
-    actions: dict[str, Any], records: Iterable[dict[str, Any]]
+    actions: ActionPlan, records: Iterable[dict[str, Any]]
 ) -> None:
     """Require a successful canonical lookup for each selected MSID and target."""
     confirmed = {
         (uuid_string(record['recording_msid']), uuid_string(candidate['id']))
         for record in records
-        if record['source'] == 'musicbrainz'
-        and record['status'] == 'ok'
-        and record.get('operation') == 'lookup'
-        for candidate in record['results']
+        if record.get('recording_msid') is not None
+        and (candidate := canonical_lookup(record)) is not None
     }
 
     for mapping in actions['mappings']:
@@ -109,12 +139,12 @@ def validate_recording_lookups(
 
 def prepare_actions(
     snapshot: dict[str, Any], decisions: list[dict[str, Any]]
-) -> dict[str, Any]:
+) -> ActionPlan:
     """Require one evidenced verdict per MSID before constructing actions."""
     targets = {t['recording_msid']: t for t in group_listens(snapshot['unlinked'])}
     reviewed: set[str] = set()
-    mappings: list[dict[str, Any]] = []
-    deletions: list[dict[str, Any]] = []
+    mappings: list[MappingAction] = []
+    deletions: list[DeletionAction] = []
 
     for decision in decisions:
         msid = uuid_string(decision['recording_msid'])
@@ -127,7 +157,7 @@ def prepare_actions(
 
         verdict = decision['verdict']
         if verdict in ('link', 'substitute'):
-            mapping = {
+            mapping: MappingAction = {
                 'recording_msid': msid,
                 'recording_mbid': decision['recording_mbid'],
             }

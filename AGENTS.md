@@ -11,6 +11,8 @@ The shared `map-listens` skill owns matching judgment, research, final review, a
 - `mb_search.py` owns MusicBrainz search and recording lookup. A single process must own MusicBrainz calls during a run to respect its shared rate limit.
 - `history.py` reads enriched history exports newest first.
 - `review.py` groups occurrences by MSID and requires complete decisions before preparing actions.
+- `execution.py` applies and verifies reviewed actions against current account state.
+- `artifacts.py` owns atomic snapshots and append-only evidence files.
 - `cli/` communicates using JSON snapshots and JSONL search / execution records. Progress goes to stderr.
 
 A recording MSID can occur many times. A mapping applies to that MSID, while deletion targets an individual `(listened_at, recording_msid)` occurrence. Preserve submitted metadata when linking.
@@ -27,14 +29,11 @@ A recording MSID can occur many times. A mapping applies to that MSID, while del
 
 Use Python 3.12+, `uv`, single quotes, and the existing Ruff configuration. Keep runtime dependencies limited to `httpx` and `python-dotenv`. Each API module owns its HTTP client.
 
-Run relevant behavioral tests when changing the API or execution contracts, then check:
+Run pre-commit before the behavioral tests:
 
 ```bash
-uv run python -m unittest discover -s tests
-uv run ruff check src/ tests/
-uv run ruff format --check src/ tests/
-uv run mypy src/lb_mapper/ --strict
 uv run pre-commit run --all-files
+uv run pytest -q
 ```
 
 Commits use `type(scope): description`, with an optional scope. Load the shared Git Workflow skill for commits and publication.

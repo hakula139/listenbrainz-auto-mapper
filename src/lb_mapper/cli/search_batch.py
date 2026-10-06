@@ -11,16 +11,18 @@ from typing import Any
 import httpx
 
 from lb_mapper import mb_search
-from lb_mapper.cli import read_json, validate_paths
+from lb_mapper.cli import validate_paths
+from lb_mapper.cli.search_input import artist_title, read_items
 from lb_mapper.cli.search_journal import SearchJournal
 from lb_mapper.lb_search import search_recording
-from lb_mapper.review import group_listens, uuid_string
+from lb_mapper.validation import uuid_string
 
 
 def _query(item: dict[str, Any], source: str) -> str:
     if source == 'labs':
-        return f'{item["artist"]} {item["track"]}'.strip()
-    if item.get('recording_mbid'):
+        artist, title = artist_title(item)
+        return f'{artist} {title}'.strip()
+    if 'recording_mbid' in item:
         return uuid_string(item['recording_mbid'])
     if 'query' in item:
         query = item['query']
@@ -29,10 +31,21 @@ def _query(item: dict[str, Any], source: str) -> str:
 
         return query
 
-    return mb_search.recording_query(item['artist'], item['track'])
+    return mb_search.recording_query(*artist_title(item))
 
 
 def _entry(item: dict[str, Any], source: str) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        raise ValueError('Search input must be an object')
+
+    if 'recording_msid' in item:
+        uuid_string(item['recording_msid'])
+
+    if source == 'musicbrainz':
+        offset = item.get('offset', 0)
+        if type(offset) is not int or offset < 0:
+            raise ValueError('MusicBrainz offset must be a non-negative integer')
+
     query = _query(item, source)
     operation = (
         'lookup' if source == 'musicbrainz' and item.get('recording_mbid') else 'search'
@@ -73,12 +86,8 @@ def main() -> None:
     args = parser.parse_args()
     validate_paths(parser, args.input, args.output)
 
-    data = read_json(args.input)
-    items = group_listens(data['unlinked']) if isinstance(data, dict) else data
-    if not isinstance(items, list):
-        parser.error('input must be a listen snapshot or an array of queries')
-
     try:
+        items = read_items(args.input)
         entries = [_entry(item, args.source) for item in items]
     except (KeyError, TypeError, ValueError) as exc:
         parser.error(f'Invalid search input: {exc}')
