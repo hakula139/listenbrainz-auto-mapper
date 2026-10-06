@@ -22,7 +22,14 @@ def _query(item: dict[str, Any], source: str) -> str:
         return f'{item["artist"]} {item["track"]}'.strip()
     if item.get('recording_mbid'):
         return uuid_string(item['recording_mbid'])
-    return item.get('query') or mb_search.recording_query(item['artist'], item['track'])
+    if 'query' in item:
+        query = item['query']
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError('MusicBrainz query must be a non-empty string')
+
+        return query
+
+    return mb_search.recording_query(item['artist'], item['track'])
 
 
 def _entry(item: dict[str, Any], source: str) -> dict[str, Any]:
@@ -71,7 +78,11 @@ def main() -> None:
     if not isinstance(items, list):
         parser.error('input must be a listen snapshot or an array of queries')
 
-    entries = [_entry(item, args.source) for item in items]
+    try:
+        entries = [_entry(item, args.source) for item in items]
+    except (KeyError, TypeError, ValueError) as exc:
+        parser.error(f'Invalid search input: {exc}')
+
     journal = SearchJournal(args.output, args.source)
 
     failed = False

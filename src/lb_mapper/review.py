@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 from uuid import UUID
 
@@ -19,7 +20,7 @@ def validate_actions(data: Any) -> dict[str, Any]:
     if not data['user'].strip():
         raise ValueError('Action plan user must not be empty')
 
-    mappings: dict[str, str] = {}
+    mappings: dict[str, dict[str, str]] = {}
     deletions: dict[tuple[int, str], dict[str, Any]] = {}
 
     for key in ('mappings', 'deletions'):
@@ -33,11 +34,19 @@ def validate_actions(data: Any) -> dict[str, Any]:
 
             msid = uuid_string(item['recording_msid'])
             if key == 'mappings':
-                mbid = uuid_string(item['recording_mbid'])
-                if msid in mappings and mappings[msid] != mbid:
+                mapping = {
+                    'recording_msid': msid,
+                    'recording_mbid': uuid_string(item['recording_mbid']),
+                }
+                if 'previous_recording_mbid' in item:
+                    mapping['previous_recording_mbid'] = uuid_string(
+                        item['previous_recording_mbid']
+                    )
+
+                if msid in mappings and mappings[msid] != mapping:
                     raise ValueError('Conflicting mappings for one MSID')
 
-                mappings[msid] = mbid
+                mappings[msid] = mapping
             else:
                 timestamp = item['listened_at']
                 if type(timestamp) is not int or timestamp < 1033410600:
@@ -53,10 +62,7 @@ def validate_actions(data: Any) -> dict[str, Any]:
 
     return {
         'user': data['user'],
-        'mappings': [
-            {'recording_msid': msid, 'recording_mbid': mbid}
-            for msid, mbid in mappings.items()
-        ],
+        'mappings': list(mappings.values()),
         'deletions': list(deletions.values()),
     }
 
@@ -80,6 +86,27 @@ def group_listens(listens: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(groups.values())
 
 
+def validate_recording_lookups(
+    actions: dict[str, Any], records: Iterable[dict[str, Any]]
+) -> None:
+    """Require a successful canonical lookup for each selected MSID and target."""
+    confirmed = {
+        (uuid_string(record['recording_msid']), uuid_string(candidate['id']))
+        for record in records
+        if record['source'] == 'musicbrainz'
+        and record['status'] == 'ok'
+        and record.get('operation') == 'lookup'
+        for candidate in record['results']
+    }
+
+    for mapping in actions['mappings']:
+        identity = (mapping['recording_msid'], mapping['recording_mbid'])
+        if identity not in confirmed:
+            raise ValueError(
+                f'Mapping target lacks a successful canonical lookup: {identity}'
+            )
+
+
 def prepare_actions(
     snapshot: dict[str, Any], decisions: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -100,12 +127,14 @@ def prepare_actions(
 
         verdict = decision['verdict']
         if verdict in ('link', 'substitute'):
-            mappings.append(
-                {
-                    'recording_msid': msid,
-                    'recording_mbid': uuid_string(decision['recording_mbid']),
-                }
-            )
+            mapping = {
+                'recording_msid': msid,
+                'recording_mbid': decision['recording_mbid'],
+            }
+            if 'previous_recording_mbid' in decision:
+                mapping['previous_recording_mbid'] = decision['previous_recording_mbid']
+
+            mappings.append(mapping)
         elif verdict == 'delete':
             if decision.get('search_complete') is not True:
                 raise ValueError(
