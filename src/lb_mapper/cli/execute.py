@@ -27,41 +27,6 @@ from lb_mapper.lb_client import ListenBrainzClient
 from lb_mapper.review import ActionPlan, DeletionAction, MappingAction, validate_actions
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--input', type=Path)
-    parser.add_argument('--output', type=Path)
-    parser.add_argument('--apply', action='store_true')
-    args = parser.parse_args()
-    validate_paths(parser, args.input, args.output)
-
-    try:
-        data = validate_actions(read_json(args.input))
-    except (ValueError, KeyError, TypeError) as exc:
-        parser.error(str(exc))
-
-    if not args.apply:
-        write_json(data, args.output)
-        return
-
-    load_dotenv()
-    user = require_env('LB_USER')
-    if user != data['user']:
-        parser.error('Plan user does not match LB_USER')
-
-    token = require_env('LB_TOKEN')
-
-    with ListenBrainzClient(token) as lb:
-        lb.validate_token(user)
-
-        if args.output and args.output.exists():
-            repair_jsonl(args.output)
-
-        context = args.output.open('a') if args.output else nullcontext(sys.stdout)
-        with context as stream:
-            _execute(lb, user, data, stream)
-
-
 def _execute(
     lb: ListenBrainzClient, user: str, data: ActionPlan, stream: TextIO
 ) -> None:
@@ -98,6 +63,41 @@ def _execute(
 
     if failed:
         raise SystemExit(1)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--input', type=Path)
+    parser.add_argument('--output', type=Path)
+    parser.add_argument('--apply', action='store_true')
+    args = parser.parse_args()
+    validate_paths(parser, args.input, args.output)
+
+    try:
+        data = validate_actions(read_json(args.input))
+    except (ValueError, KeyError, TypeError) as exc:
+        parser.error(str(exc))
+
+    if not args.apply:
+        write_json(data, args.output)
+        return
+
+    load_dotenv()
+    user = require_env('LB_USER')
+    if user != data['user']:
+        parser.error('Plan user does not match LB_USER')
+
+    token = require_env('LB_TOKEN')
+
+    with ListenBrainzClient(token) as lb:
+        lb.validate_token(user)
+
+        if args.output and args.output.exists():
+            repair_jsonl(args.output)
+
+        context = args.output.open('a') if args.output else nullcontext(sys.stdout)
+        with context as stream:
+            _execute(lb, user, data, stream)
 
 
 if __name__ == '__main__':

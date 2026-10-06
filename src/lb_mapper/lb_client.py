@@ -113,6 +113,16 @@ class ListenBrainzClient:
     ) -> None:
         self.close()
 
+    def close(self) -> None:
+        self._client.close()
+
+    def validate_token(self, user: str) -> None:
+        data = self._request('GET', '/1/validate-token').json()
+        if not isinstance(data, dict) or type(data.get('valid')) is not bool:
+            raise ValueError('ListenBrainz returned malformed token validation')
+        if not data['valid'] or data.get('user_name') != user:
+            raise ValueError('LB_TOKEN does not belong to the requested LB_USER')
+
     def iter_listens(self, user: str, max_ts: int | None = None) -> Iterator[Listen]:
         """Yield listens in reverse chronological order.
 
@@ -176,32 +186,24 @@ class ListenBrainzClient:
 
         return result
 
-    def submit_mapping(self, recording_msid: str, recording_mbid: str) -> None:
-        self._request(
-            'POST',
-            '/1/metadata/submit_manual_mapping/',
-            json={
-                'recording_msid': recording_msid,
-                'recording_mbid': recording_mbid,
-            },
-        )
+    def get_listen(
+        self, user: str, listened_at: int, recording_msid: str
+    ) -> Listen | None:
+        """Find one occurrence, detecting a saturated timestamp page."""
+        for count in (100, _MAX_PAGE_LIMIT):
+            listens = self._listen_page(user, count=count, max_ts=listened_at + 1)
 
-    def delete_listen(self, listened_at: int, recording_msid: str) -> None:
-        self._request(
-            'POST',
-            '/1/delete-listen',
-            json={
-                'listened_at': listened_at,
-                'recording_msid': recording_msid,
-            },
-        )
+            for listen in listens:
+                if (listen.listened_at, listen.recording_msid) == (
+                    listened_at,
+                    recording_msid,
+                ):
+                    return listen
 
-    def validate_token(self, user: str) -> None:
-        data = self._request('GET', '/1/validate-token').json()
-        if not isinstance(data, dict) or type(data.get('valid')) is not bool:
-            raise ValueError('ListenBrainz returned malformed token validation')
-        if not data['valid'] or data.get('user_name') != user:
-            raise ValueError('LB_TOKEN does not belong to the requested LB_USER')
+            if len(listens) < count or listens[-1].listened_at < listened_at:
+                return None
+
+        raise RuntimeError('Cannot resolve this occurrence in a saturated page')
 
     def get_manual_mapping(self, recording_msid: str) -> str | None:
         try:
@@ -221,45 +223,25 @@ class ListenBrainzClient:
 
         return uuid_string(data['mapping'].get('recording_mbid'))
 
-    def _listen_page(self, user: str, **params: Any) -> list[Listen]:
-        data = self._request('GET', f'/1/user/{user}/listens', params=params).json()
-        if not isinstance(data, dict) or not isinstance(data.get('payload'), dict):
-            raise ValueError('ListenBrainz returned malformed listen response')
+    def submit_mapping(self, recording_msid: str, recording_mbid: str) -> None:
+        self._request(
+            'POST',
+            '/1/metadata/submit_manual_mapping/',
+            json={
+                'recording_msid': recording_msid,
+                'recording_mbid': recording_mbid,
+            },
+        )
 
-        items = data['payload'].get('listens')
-        if not isinstance(items, list):
-            raise ValueError('ListenBrainz listens must be an array')
-
-        listens = [Listen.from_api(item) for item in items]
-        if any(not listen.recording_msid for listen in listens):
-            raise ValueError('ListenBrainz listen page requires recording MSIDs')
-        if any(a.listened_at < b.listened_at for a, b in pairwise(listens)):
-            raise ValueError('ListenBrainz listens are not newest first')
-        if 'max_ts' in params and any(
-            listen.listened_at >= params['max_ts'] for listen in listens
-        ):
-            raise ValueError('ListenBrainz listen exceeds the requested time boundary')
-
-        return listens
-
-    def get_listen(
-        self, user: str, listened_at: int, recording_msid: str
-    ) -> Listen | None:
-        """Find one occurrence, detecting a saturated timestamp page."""
-        for count in (100, _MAX_PAGE_LIMIT):
-            listens = self._listen_page(user, count=count, max_ts=listened_at + 1)
-
-            for listen in listens:
-                if (listen.listened_at, listen.recording_msid) == (
-                    listened_at,
-                    recording_msid,
-                ):
-                    return listen
-
-            if len(listens) < count or listens[-1].listened_at < listened_at:
-                return None
-
-        raise RuntimeError('Cannot resolve this occurrence in a saturated page')
+    def delete_listen(self, listened_at: int, recording_msid: str) -> None:
+        self._request(
+            'POST',
+            '/1/delete-listen',
+            json={
+                'listened_at': listened_at,
+                'recording_msid': recording_msid,
+            },
+        )
 
     def list_exports(self) -> list[dict[str, Any]]:
         data: list[dict[str, Any]] = self._request('GET', '/1/export/list').json()
@@ -288,6 +270,27 @@ class ListenBrainzClient:
             with temporary.open('wb') as stream:
                 for chunk in resp.iter_bytes():
                     stream.write(chunk)
+
+    def _listen_page(self, user: str, **params: Any) -> list[Listen]:
+        data = self._request('GET', f'/1/user/{user}/listens', params=params).json()
+        if not isinstance(data, dict) or not isinstance(data.get('payload'), dict):
+            raise ValueError('ListenBrainz returned malformed listen response')
+
+        items = data['payload'].get('listens')
+        if not isinstance(items, list):
+            raise ValueError('ListenBrainz listens must be an array')
+
+        listens = [Listen.from_api(item) for item in items]
+        if any(not listen.recording_msid for listen in listens):
+            raise ValueError('ListenBrainz listen page requires recording MSIDs')
+        if any(a.listened_at < b.listened_at for a, b in pairwise(listens)):
+            raise ValueError('ListenBrainz listens are not newest first')
+        if 'max_ts' in params and any(
+            listen.listened_at >= params['max_ts'] for listen in listens
+        ):
+            raise ValueError('ListenBrainz listen exceeds the requested time boundary')
+
+        return listens
 
     def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         """Pace requests and retry throttling or transient failures of safe reads."""
@@ -342,6 +345,3 @@ class ListenBrainzClient:
             return
 
         self._sleep_for_reset(resp)
-
-    def close(self) -> None:
-        self._client.close()
