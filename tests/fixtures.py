@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 
 MSID = '00000000-0000-0000-0000-000000000001'
 OTHER_MSID = '00000000-0000-0000-0000-000000000002'
@@ -10,7 +12,7 @@ OTHER_MBID = '10000000-0000-0000-0000-000000000002'
 TIMESTAMP = 1700000000
 
 
-def api_listen(timestamp: int | float, index: int) -> dict:
+def api_listen(timestamp: int | float, index: int) -> dict[str, Any]:
     return {
         'listened_at': timestamp,
         'recording_msid': f'00000000-0000-0000-0000-{index:012d}',
@@ -18,7 +20,7 @@ def api_listen(timestamp: int | float, index: int) -> dict:
     }
 
 
-def occurrence(timestamp: int | str = TIMESTAMP, msid: str = MSID) -> dict:
+def occurrence(timestamp: int | str = TIMESTAMP, msid: str = MSID) -> dict[str, Any]:
     return {
         'listened_at': timestamp,
         'recording_msid': msid,
@@ -28,7 +30,7 @@ def occurrence(timestamp: int | str = TIMESTAMP, msid: str = MSID) -> dict:
     }
 
 
-def recording(mbid: str = MBID) -> dict:
+def recording(mbid: str = MBID) -> dict[str, Any]:
     return {
         'id': mbid,
         'title': 'Title',

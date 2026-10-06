@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
-from lb_mapper.review import group_listens, prepare_actions, validate_recording_lookups
+from lb_mapper.review import (
+    ActionPlan,
+    group_listens,
+    prepare_actions,
+    validate_recording_lookups,
+)
 from tests.fixtures import (
     MBID,
     MSID,
@@ -16,8 +23,12 @@ from tests.fixtures import (
 )
 
 
-def test_selected_target_requires_a_successful_canonical_lookup():
-    actions = {'mappings': [{'recording_msid': MSID, 'recording_mbid': MBID}]}
+def test_selected_target_requires_a_successful_canonical_lookup() -> None:
+    actions: ActionPlan = {
+        'user': 'user',
+        'mappings': [{'recording_msid': MSID, 'recording_mbid': MBID}],
+        'deletions': [],
+    }
     lookup = {
         'source': 'musicbrainz',
         'operation': 'lookup',
@@ -45,8 +56,8 @@ def test_selected_target_requires_a_successful_canonical_lookup():
             validate_recording_lookups(actions, iter(records))
 
 
-def test_reviewed_previous_mapping_is_validated_and_preserved():
-    snapshot = {'user': 'user', 'unlinked': [occurrence()]}
+def test_reviewed_previous_mapping_is_validated_and_preserved() -> None:
+    snapshot: dict[str, Any] = {'user': 'user', 'unlinked': [occurrence()]}
     decision = {
         'recording_msid': MSID,
         'verdict': 'link',
@@ -70,8 +81,11 @@ def test_reviewed_previous_mapping_is_validated_and_preserved():
         prepare_actions(snapshot, [decision])
 
 
-def test_repeated_msid_has_one_mapping_and_preserves_occurrences():
-    snapshot = {'user': 'user', 'unlinked': [occurrence(), occurrence(TIMESTAMP - 1)]}
+def test_repeated_msid_has_one_mapping_and_preserves_occurrences() -> None:
+    snapshot: dict[str, Any] = {
+        'user': 'user',
+        'unlinked': [occurrence(), occurrence(TIMESTAMP - 1)],
+    }
     groups = group_listens(snapshot['unlinked'])
 
     assert groups[0]['listens'] == snapshot['unlinked']
@@ -93,8 +107,11 @@ def test_repeated_msid_has_one_mapping_and_preserves_occurrences():
     assert actions['deletions'] == []
 
 
-def test_delete_expands_every_occurrence_after_complete_search():
-    snapshot = {'user': 'user', 'unlinked': [occurrence(), occurrence(TIMESTAMP - 1)]}
+def test_delete_expands_every_occurrence_after_complete_search() -> None:
+    snapshot: dict[str, Any] = {
+        'user': 'user',
+        'unlinked': [occurrence(), occurrence(TIMESTAMP - 1)],
+    }
     decision = {
         'recording_msid': MSID,
         'verdict': 'delete',
@@ -114,8 +131,11 @@ def test_delete_expands_every_occurrence_after_complete_search():
     ]
 
 
-def test_missing_duplicate_and_unknown_decisions_fail():
-    snapshot = {'user': 'user', 'unlinked': [occurrence(), occurrence(msid=OTHER_MSID)]}
+def test_missing_duplicate_and_unknown_decisions_fail() -> None:
+    snapshot: dict[str, Any] = {
+        'user': 'user',
+        'unlinked': [occurrence(), occurrence(msid=OTHER_MSID)],
+    }
     decision = {
         'recording_msid': MSID,
         'verdict': 'skip',
@@ -133,8 +153,11 @@ def test_missing_duplicate_and_unknown_decisions_fail():
         prepare_actions({'user': 'user', 'unlinked': []}, [decision])
 
 
-def test_preparation_rejects_invalid_occurrence_time():
-    snapshot = {'user': 'user', 'unlinked': [occurrence(timestamp='invalid')]}
+def test_preparation_rejects_invalid_occurrence_time() -> None:
+    snapshot: dict[str, Any] = {
+        'user': 'user',
+        'unlinked': [occurrence(timestamp='invalid')],
+    }
     decision = {
         'recording_msid': MSID,
         'verdict': 'delete',

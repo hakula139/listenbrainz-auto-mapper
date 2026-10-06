@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import httpx
@@ -12,19 +15,20 @@ from lb_mapper.lb_client import Listen, ListenBrainzClient
 from tests.fixtures import MBID, MSID, TIMESTAMP, api_listen, recording
 
 
-def test_failed_export_download_preserves_archive_and_staging_name_collision(tmp_path):
+def test_failed_export_download_preserves_archive_and_staging_name_collision(
+    tmp_path: Path,
+) -> None:
 
     class InterruptedStream(httpx.SyncByteStream):
-        def __iter__(self):
+        def __iter__(self) -> Iterator[bytes]:
             yield b'partial archive'
             raise httpx.ReadError('interrupted')
 
-    def respond(request):
+    def respond(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, stream=InterruptedStream())
 
-    root = tmp_path
-    archive = root / 'history.zip'
-    collision = root / 'history.zip.tmp'
+    archive = tmp_path / 'history.zip'
+    collision = tmp_path / 'history.zip.tmp'
     archive.write_bytes(b'previous archive')
     collision.write_bytes(b'another input')
 
@@ -41,7 +45,7 @@ def test_failed_export_download_preserves_archive_and_staging_name_collision(tmp
 
     assert archive.read_bytes() == b'previous archive'
     assert collision.read_bytes() == b'another input'
-    assert set(root.iterdir()) == {archive, collision}
+    assert set(tmp_path.iterdir()) == {archive, collision}
 
 
 @pytest.mark.parametrize(
@@ -66,7 +70,9 @@ def test_failed_export_download_preserves_archive_and_staging_name_collision(tmp
         },
     ),
 )
-def test_malformed_pages_cannot_establish_absence_or_exhausted_history(payload):
+def test_malformed_pages_cannot_establish_absence_or_exhausted_history(
+    payload: object,
+) -> None:
     with ListenBrainzClient('offline') as lb:
         response = httpx.Response(200, json=payload)
         with patch.object(lb, '_request', return_value=response):
@@ -76,11 +82,11 @@ def test_malformed_pages_cannot_establish_absence_or_exhausted_history(payload):
                 lb.get_listen('user', TIMESTAMP, MSID)
 
 
-def test_invalid_required_listen_fields_fail_at_the_boundary():
+def test_invalid_required_listen_fields_fail_at_the_boundary() -> None:
     valid = api_listen(TIMESTAMP, 1)
     metadata = valid['track_metadata']
 
-    for change in (
+    changes: tuple[dict[str, Any], ...] = (
         {'listened_at': True},
         {'listened_at': -1},
         {'recording_msid': 'invalid'},
@@ -90,20 +96,24 @@ def test_invalid_required_listen_fields_fail_at_the_boundary():
         {'track_metadata': {**metadata, 'additional_info': []}},
         {'track_metadata': {**metadata, 'mbid_mapping': []}},
         {'track_metadata': {**metadata, 'mbid_mapping': {'recording_mbid': 'invalid'}}},
-    ):
+    )
+
+    for change in changes:
         with pytest.raises(ValueError):
             Listen.from_api({**valid, **change})
 
 
-def test_only_a_404_establishes_missing_manual_mapping():
+def test_only_a_404_establishes_missing_manual_mapping() -> None:
+    payloads: tuple[dict[str, Any], ...] = (
+        {},
+        {'mapping': None},
+        {'mapping': {}},
+        {'mapping': {'recording_mbid': None}},
+        {'mapping': {'recording_mbid': 'invalid'}},
+    )
+
     with ListenBrainzClient('offline') as lb:
-        for payload in (
-            {},
-            {'mapping': None},
-            {'mapping': {}},
-            {'mapping': {'recording_mbid': None}},
-            {'mapping': {'recording_mbid': 'invalid'}},
-        ):
+        for payload in payloads:
             response = httpx.Response(200, json=payload)
             with (
                 patch.object(lb, '_request', return_value=response),
@@ -131,7 +141,9 @@ def test_only_a_404_establishes_missing_manual_mapping():
         [api_listen(TIMESTAMP + 1, 1)],
     ),
 )
-def test_out_of_order_and_out_of_range_pages_cannot_prove_absence(items):
+def test_out_of_order_and_out_of_range_pages_cannot_prove_absence(
+    items: list[dict[str, Any]],
+) -> None:
     with ListenBrainzClient('offline') as lb:
         response = httpx.Response(200, json={'payload': {'listens': items}})
         with (
@@ -141,7 +153,7 @@ def test_out_of_order_and_out_of_range_pages_cannot_prove_absence(items):
             lb.get_listen('user', TIMESTAMP, MSID)
 
 
-def test_truthy_token_validation_values_do_not_authorize_writes():
+def test_truthy_token_validation_values_do_not_authorize_writes() -> None:
     with ListenBrainzClient('offline') as lb:
         response = httpx.Response(200, json={'valid': 'false', 'user_name': 'user'})
         with (
@@ -162,7 +174,9 @@ def test_truthy_token_validation_values_do_not_authorize_writes():
         {'recordings': [{'id': 'invalid'}], 'count': 1, 'offset': 0},
     ),
 )
-def test_bad_pagination_does_not_become_a_successful_search(page):
+def test_bad_pagination_does_not_become_a_successful_search(
+    page: dict[str, Any],
+) -> None:
     with (
         patch.object(mb_search, '_request', return_value=(None, page)),
         pytest.raises(ValueError),
@@ -173,7 +187,7 @@ def test_bad_pagination_does_not_become_a_successful_search(page):
 @pytest.mark.parametrize(
     'key', ('title', 'video', 'artist-credit', 'releases', 'isrcs', 'relations')
 )
-def test_lookup_requires_identity_and_requested_metadata(key):
+def test_lookup_requires_identity_and_requested_metadata(key: str) -> None:
     payload = recording()
     del payload[key]
 

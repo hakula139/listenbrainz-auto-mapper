@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -14,8 +16,8 @@ from tests.fixtures import MBID, MSID, OTHER_MBID, OTHER_MSID, TIMESTAMP, api_li
 
 
 def test_requested_count_skips_linked_and_keeps_repeated_occurrences(
-    monkeypatch, capsys
-):
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     seen = []
     rows = [
         Listen(
@@ -26,7 +28,7 @@ def test_requested_count_skips_linked_and_keeps_repeated_occurrences(
         Listen(TIMESTAMP - 3, OTHER_MSID, 'Older', 'Track', '', None),
     ]
 
-    def history():
+    def history() -> Iterator[Listen]:
         for row in rows:
             seen.append(row.listened_at)
             yield row
@@ -53,11 +55,11 @@ def test_requested_count_skips_linked_and_keeps_repeated_occurrences(
     ] == [(TIMESTAMP - 1, MSID), (TIMESTAMP - 2, MSID)]
 
 
-def test_timestamp_saturation_expands_page_and_reaches_older_history():
+def test_timestamp_saturation_expands_page_and_reaches_older_history() -> None:
     history = [api_listen(TIMESTAMP, i) for i in range(120)]
     history.append(api_listen(TIMESTAMP - 1, 999))
 
-    def respond(method, url, **kwargs):
+    def respond(method: str, url: str, **kwargs: Any) -> httpx.Response:
         params = kwargs['params']
         eligible = [
             item
@@ -79,10 +81,10 @@ def test_timestamp_saturation_expands_page_and_reaches_older_history():
     ]
 
 
-def test_maximum_saturated_timestamp_fails_without_claiming_exhaustion():
+def test_maximum_saturated_timestamp_fails_without_claiming_exhaustion() -> None:
     page = [api_listen(TIMESTAMP, i) for i in range(1000)]
 
-    def respond(method, url, **kwargs):
+    def respond(method: str, url: str, **kwargs: Any) -> httpx.Response:
         return httpx.Response(
             200, json={'payload': {'listens': page[: kwargs['params']['count']]}}
         )
@@ -95,7 +97,7 @@ def test_maximum_saturated_timestamp_fails_without_claiming_exhaustion():
         list(client.iter_listens('user'))
 
 
-def test_empty_mapping_is_unlinked_and_submitted_mbid_is_preserved():
+def test_empty_mapping_is_unlinked_and_submitted_mbid_is_preserved() -> None:
     item = api_listen(TIMESTAMP, 1)
     item['track_metadata']['mbid_mapping'] = {}
     item['track_metadata']['additional_info'] = None
@@ -111,14 +113,14 @@ def test_empty_mapping_is_unlinked_and_submitted_mbid_is_preserved():
     assert parsed.additional_info == info
 
 
-def test_top_level_msid_has_precedence():
+def test_top_level_msid_has_precedence() -> None:
     item = api_listen(TIMESTAMP, 1)
     item['track_metadata']['additional_info'] = {'recording_msid': OTHER_MSID}
 
     assert Listen.from_api(item).recording_msid == MSID
 
 
-def test_safe_read_retry_does_not_repeat_an_ambiguous_write():
+def test_safe_read_retry_does_not_repeat_an_ambiguous_write() -> None:
     response = httpx.Response(
         200, json={}, request=httpx.Request('GET', 'https://test')
     )
@@ -142,7 +144,7 @@ def test_safe_read_retry_does_not_repeat_an_ambiguous_write():
             request.assert_called_once()
 
 
-def test_token_owner_mismatch_is_rejected_from_api_response():
+def test_token_owner_mismatch_is_rejected_from_api_response() -> None:
     with ListenBrainzClient('token') as lb:
         response = httpx.Response(200, json={'valid': True, 'user_name': 'other'})
         with (
@@ -152,10 +154,10 @@ def test_token_owner_mismatch_is_rejected_from_api_response():
             lb.validate_token('user')
 
 
-def test_occurrence_lookup_expands_and_detects_saturation():
+def test_occurrence_lookup_expands_and_detects_saturation() -> None:
     history = [api_listen(TIMESTAMP, i) for i in range(1000)]
 
-    def respond(method, url, **kwargs):
+    def respond(method: str, url: str, **kwargs: Any) -> httpx.Response:
         count = kwargs['params']['count']
         return httpx.Response(200, json={'payload': {'listens': history[:count]}})
 
@@ -164,6 +166,9 @@ def test_occurrence_lookup_expands_and_detects_saturation():
         patch.object(lb, '_request', side_effect=respond),
     ):
         target = history[-1]['recording_msid']
-        assert lb.get_listen('user', TIMESTAMP, target).recording_msid == target
+        found = lb.get_listen('user', TIMESTAMP, target)
+
+        assert found is not None
+        assert found.recording_msid == target
         with pytest.raises(RuntimeError, match='saturated'):
             lb.get_listen('user', TIMESTAMP, OTHER_MBID)

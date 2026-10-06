@@ -5,6 +5,8 @@ from __future__ import annotations
 import io
 import json
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from typing import Any
 from unittest.mock import Mock, call, patch
 
 import httpx
@@ -19,7 +21,9 @@ from tests.fixtures import MBID, MSID, OTHER_MBID, OTHER_MSID, recording
 @pytest.mark.parametrize(
     'changes', ({'track': None}, {'artist': []}, {'recording_msid': 'invalid'})
 )
-def test_invalid_late_bulk_input_preserves_journal_before_lookup(tmp_path, changes):
+def test_invalid_late_bulk_input_preserves_journal_before_lookup(
+    tmp_path: Path, changes: dict[str, object]
+) -> None:
     path = tmp_path / 'queries.json'
     output = tmp_path / 'results.jsonl'
     valid = {'recording_msid': MSID, 'artist': 'A', 'track': 'B'}
@@ -40,7 +44,7 @@ def test_invalid_late_bulk_input_preserves_journal_before_lookup(tmp_path, chang
     lookup.assert_not_called()
 
 
-def test_bulk_lookup_routes_unordered_hits_and_preserves_collision_miss():
+def test_bulk_lookup_routes_unordered_hits_and_preserves_collision_miss() -> None:
     client = Mock()
     hit = {
         'index': 1,
@@ -56,7 +60,7 @@ def test_bulk_lookup_routes_unordered_hits_and_preserves_collision_miss():
 
     with (
         patch.object(lb_search, '_get_client', return_value=client),
-        patch.object(lb_search.time, 'sleep'),
+        patch('lb_mapper.lb_search.time.sleep'),
     ):
         results = lb_search.lookup_recordings([('AB', 'C'), ('A', 'BC')])
 
@@ -65,7 +69,9 @@ def test_bulk_lookup_routes_unordered_hits_and_preserves_collision_miss():
 
 
 @pytest.mark.parametrize('changes', ({'index': -1}, {'recording_arg': 'Foreign'}))
-def test_bulk_lookup_rejects_foreign_index_and_arguments(changes):
+def test_bulk_lookup_rejects_foreign_index_and_arguments(
+    changes: dict[str, object],
+) -> None:
     hit = {
         'index': 0,
         'artist_credit_arg': 'A',
@@ -80,13 +86,15 @@ def test_bulk_lookup_rejects_foreign_index_and_arguments(changes):
 
     with (
         patch.object(lb_search, '_get_client', return_value=client),
-        patch.object(lb_search.time, 'sleep'),
+        patch('lb_mapper.lb_search.time.sleep'),
         pytest.raises(ValueError),
     ):
         lb_search.lookup_recordings([('A', 'B')])
 
 
-def test_bulk_lookup_deduplicates_raw_pairs_and_reuses_resumed_candidates(tmp_path):
+def test_bulk_lookup_deduplicates_raw_pairs_and_reuses_resumed_candidates(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / 'queries.json'
     output = tmp_path / 'results.jsonl'
     path.write_text(
@@ -116,7 +124,7 @@ def test_bulk_lookup_deduplicates_raw_pairs_and_reuses_resumed_candidates(tmp_pa
     assert rows[1]['results'][0]['recording_mbid'] == MBID
 
 
-def test_outage_is_error_with_no_false_empty_result():
+def test_outage_is_error_with_no_false_empty_result() -> None:
     with (
         patch.object(lb_search, 'search_recording'),
         patch.object(
@@ -130,7 +138,7 @@ def test_outage_is_error_with_no_false_empty_result():
     assert 'results' not in row
 
 
-def test_successful_empty_search_is_distinct():
+def test_successful_empty_search_is_distinct() -> None:
     with patch.object(search_batch, 'search_recording', return_value=[]):
         row = search_batch._search_one({'artist': 'A', 'track': 'B'}, 'labs')
 
@@ -138,7 +146,7 @@ def test_successful_empty_search_is_distinct():
     assert row['results'] == []
 
 
-def test_resume_skips_success_but_retries_failure(tmp_path):
+def test_resume_skips_success_but_retries_failure(tmp_path: Path) -> None:
     queries = tmp_path / 'queries.json'
     output = tmp_path / 'results.jsonl'
     queries.write_text(
@@ -185,7 +193,7 @@ def test_resume_skips_success_but_retries_failure(tmp_path):
     assert rows[-1]['status'] == 'ok'
 
 
-def test_malformed_api_result_propagates():
+def test_malformed_api_result_propagates() -> None:
     client = Mock()
     client.post.return_value = httpx.Response(
         200,
@@ -200,9 +208,9 @@ def test_malformed_api_result_propagates():
         lb_search.search_recording('A', 'B')
 
 
-def test_musicbrainz_lookup_url_and_metadata_includes():
+def test_musicbrainz_lookup_url_and_metadata_includes() -> None:
 
-    def respond(request):
+    def respond(request: httpx.Request) -> httpx.Response:
         assert (
             str(request.url).split('?')[0]
             == f'https://musicbrainz.org/ws/2/recording/{MBID}'
@@ -216,12 +224,12 @@ def test_musicbrainz_lookup_url_and_metadata_includes():
             transport=httpx.MockTransport(respond),
         ) as client,
         patch.object(mb_search, '_get_client', return_value=client),
-        patch.object(mb_search.time, 'sleep'),
+        patch('lb_mapper.mb_search.time.sleep'),
     ):
         assert mb_search.lookup_recording(MBID) == recording(MBID)
 
 
-def test_search_cache_does_not_suppress_recording_lookup(tmp_path):
+def test_search_cache_does_not_suppress_recording_lookup(tmp_path: Path) -> None:
     path = tmp_path / 'queries.json'
     path.write_text(
         json.dumps(
@@ -257,8 +265,8 @@ def test_search_cache_does_not_suppress_recording_lookup(tmp_path):
 
 @pytest.mark.parametrize('legacy_operation', (True, False))
 def test_incomplete_historical_lookups_refresh_once_then_resume(
-    tmp_path, legacy_operation
-):
+    tmp_path: Path, legacy_operation: bool
+) -> None:
     path = tmp_path / 'queries.json'
     output = tmp_path / 'results.jsonl'
     query = {'recording_msid': MSID, 'recording_mbid': MBID}
@@ -302,10 +310,10 @@ def test_incomplete_historical_lookups_refresh_once_then_resume(
     assert rows[1]['operation'] == 'lookup'
 
 
-def test_merged_recording_lookup_returns_surviving_identifier():
+def test_merged_recording_lookup_returns_surviving_identifier() -> None:
     events = []
 
-    def respond(request):
+    def respond(request: httpx.Request) -> httpx.Response:
         events.append('request')
         if request.url.path.endswith(MBID):
             return httpx.Response(
@@ -324,8 +332,9 @@ def test_merged_recording_lookup_returns_surviving_identifier():
             transport=httpx.MockTransport(respond),
         ) as client,
         patch.object(mb_search, '_get_client', return_value=client),
-        patch.object(
-            mb_search.time, 'sleep', side_effect=lambda _: events.append('pace')
+        patch(
+            'lb_mapper.mb_search.time.sleep',
+            side_effect=lambda _: events.append('pace'),
         ),
     ):
         assert mb_search.lookup_recording(MBID)['id'] == OTHER_MBID
@@ -334,11 +343,13 @@ def test_merged_recording_lookup_returns_surviving_identifier():
 
 
 @pytest.mark.parametrize('persistent', (False, True))
-def test_transient_musicbrainz_read_retries_are_paced_and_bounded(persistent):
+def test_transient_musicbrainz_read_retries_are_paced_and_bounded(
+    persistent: bool,
+) -> None:
     events = []
     calls = 0
 
-    def respond(request):
+    def respond(request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
         events.append('request')
@@ -352,9 +363,8 @@ def test_transient_musicbrainz_read_retries_are_paced_and_bounded(persistent):
             transport=httpx.MockTransport(respond),
         ) as client,
         patch.object(mb_search, '_get_client', return_value=client),
-        patch.object(
-            mb_search.time,
-            'sleep',
+        patch(
+            'lb_mapper.mb_search.time.sleep',
             side_effect=lambda _: events.append('pace'),
         ),
     ):
@@ -377,7 +387,9 @@ def test_transient_musicbrainz_read_retries_are_paced_and_bounded(persistent):
     ]
 
 
-def test_legacy_search_without_pagination_cannot_satisfy_current_query(tmp_path):
+def test_legacy_search_without_pagination_cannot_satisfy_current_query(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / 'results.jsonl'
     row = {
         'recording_msid': MSID,
@@ -401,10 +413,15 @@ def test_legacy_search_without_pagination_cannot_satisfy_current_query(tmp_path)
     resumed = SearchJournal(path, 'musicbrainz')
 
     assert resumed.is_complete(row)
-    assert resumed.cached(row)['result_count'] == 1
+    cached = resumed.cached(row)
+
+    assert cached is not None
+    assert cached['result_count'] == 1
 
 
-def test_search_pages_keep_total_count_and_distinct_resume_identity(tmp_path):
+def test_search_pages_keep_total_count_and_distinct_resume_identity(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / 'queries.json'
     output = tmp_path / 'results.jsonl'
     path.write_text(
@@ -417,7 +434,7 @@ def test_search_pages_keep_total_count_and_distinct_resume_identity(tmp_path):
         )
     )
 
-    def page(query, offset):
+    def page(query: str, offset: int) -> dict[str, Any]:
         return {
             'recordings': [{'id': MBID if offset == 0 else OTHER_MBID}],
             'count': 101,

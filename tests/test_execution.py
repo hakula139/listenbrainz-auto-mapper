@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 from contextlib import redirect_stdout
+from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
@@ -12,11 +13,11 @@ import pytest
 
 from lb_mapper.cli import execute, export_history, verify
 from lb_mapper.lb_client import Listen
-from lb_mapper.review import validate_actions
+from lb_mapper.review import DeletionAction, MappingAction, validate_actions
 from tests.fixtures import MBID, MSID, OTHER_MBID, OTHER_MSID, TIMESTAMP, occurrence
 
 
-def test_invalid_late_item_prevents_client_creation():
+def test_invalid_late_item_prevents_client_creation() -> None:
     data = {
         'user': 'user',
         'mappings': [
@@ -38,7 +39,7 @@ def test_invalid_late_item_prevents_client_creation():
     client.assert_not_called()
 
 
-def test_duplicate_actions_collapse_and_conflicts_fail():
+def test_duplicate_actions_collapse_and_conflicts_fail() -> None:
     item = {'recording_msid': MSID, 'recording_mbid': MBID}
 
     assert validate_actions({'user': 'user', 'mappings': [item, item]})['mappings'] == [
@@ -70,9 +71,9 @@ def test_duplicate_actions_collapse_and_conflicts_fail():
         )
 
 
-def test_reviewed_replacement_rechecks_current_mapping():
+def test_reviewed_replacement_rechecks_current_mapping() -> None:
     lb = Mock()
-    item = {
+    item: MappingAction = {
         'recording_msid': MSID,
         'recording_mbid': MBID,
         'previous_recording_mbid': OTHER_MBID,
@@ -93,9 +94,9 @@ def test_reviewed_replacement_rechecks_current_mapping():
     lb.submit_mapping.assert_not_called()
 
 
-def test_mapping_readback_and_existing_conflict():
+def test_mapping_readback_and_existing_conflict() -> None:
     lb = Mock()
-    item = {'recording_msid': MSID, 'recording_mbid': MBID}
+    item: MappingAction = {'recording_msid': MSID, 'recording_mbid': MBID}
     lb.get_manual_mapping.side_effect = [None, MBID]
 
     assert execute.apply_mapping(lb, item) == 'mapped'
@@ -110,12 +111,14 @@ def test_mapping_readback_and_existing_conflict():
     lb.submit_mapping.assert_not_called()
 
 
-def test_deletion_rechecks_current_link_and_reports_scheduling():
+def test_deletion_rechecks_current_link_and_reports_scheduling() -> None:
     lb = Mock()
     lb.get_listen.return_value = Listen(TIMESTAMP, MSID, 'A', 'B', '', None)
     lb.get_manual_mapping.return_value = None
 
-    assert execute.apply_deletion(lb, 'user', occurrence()) == 'scheduled'
+    item: DeletionAction = {'listened_at': TIMESTAMP, 'recording_msid': MSID}
+
+    assert execute.apply_deletion(lb, 'user', item) == 'scheduled'
 
     lb.delete_listen.assert_called_once_with(TIMESTAMP, MSID)
     lb.reset_mock()
@@ -124,12 +127,12 @@ def test_deletion_rechecks_current_link_and_reports_scheduling():
     )
 
     with pytest.raises(ValueError, match='now linked'):
-        execute.apply_deletion(lb, 'user', occurrence())
+        execute.apply_deletion(lb, 'user', item)
 
     lb.delete_listen.assert_not_called()
 
 
-def test_batch_failure_returns_nonzero_and_keeps_result_record():
+def test_batch_failure_returns_nonzero_and_keeps_result_record() -> None:
     data = {
         'user': 'user',
         'mappings': [
@@ -164,7 +167,7 @@ def test_batch_failure_returns_nonzero_and_keeps_result_record():
     deletion.assert_not_called()
 
 
-def test_hardlinked_output_is_rejected_before_account_requests(tmp_path):
+def test_hardlinked_output_is_rejected_before_account_requests(tmp_path: Path) -> None:
     source = tmp_path / 'actions.json'
     output = tmp_path / 'verification.jsonl'
     source.write_text(json.dumps({'user': 'user'}))
@@ -184,8 +187,8 @@ def test_hardlinked_output_is_rejected_before_account_requests(tmp_path):
 
 
 def test_interrupted_verification_appends_observations_without_erasing_history(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     output = tmp_path / 'verification.jsonl'
     previous = {'status': 'verified', 'recording_msid': MSID}
     output.write_text(json.dumps(previous) + '\n')
@@ -219,7 +222,7 @@ def test_interrupted_verification_appends_observations_without_erasing_history(
     assert len(rows) == 2
 
 
-def test_overlapping_output_rejected_before_plan_is_overwritten(tmp_path):
+def test_overlapping_output_rejected_before_plan_is_overwritten(tmp_path: Path) -> None:
     path = tmp_path / 'actions.json'
     original = json.dumps({'user': 'user', 'mappings': []})
     path.write_text(original)
@@ -237,7 +240,7 @@ def test_overlapping_output_rejected_before_plan_is_overwritten(tmp_path):
     client.assert_not_called()
 
 
-def test_verification_auth_failure_preserves_previous_report(tmp_path):
+def test_verification_auth_failure_preserves_previous_report(tmp_path: Path) -> None:
     output = tmp_path / 'verification.jsonl'
     output.write_text('previous report\n')
     lb = MagicMock()
@@ -260,14 +263,17 @@ def test_verification_auth_failure_preserves_previous_report(tmp_path):
 @pytest.mark.parametrize(
     'action, state, expected, status',
     (
-        ('deletions', occurrence(), 2, 'pending'),
+        ('deletions', Listen(TIMESTAMP, MSID, 'A', 'B', '', None), 2, 'pending'),
         ('mappings', OTHER_MBID, 1, 'mismatch'),
         ('mappings', httpx.ConnectError('offline'), 1, 'error'),
     ),
 )
 def test_verification_distinguishes_pending_mismatch_and_query_error(
-    action, state, expected, status
-):
+    action: str,
+    state: Listen | str | httpx.HTTPError,
+    expected: int,
+    status: str,
+) -> None:
     item = (
         occurrence()
         if action == 'deletions'
@@ -297,7 +303,9 @@ def test_verification_distinguishes_pending_mismatch_and_query_error(
     assert json.loads(output.getvalue())['status'] == status
 
 
-def test_export_state_cannot_collide_with_output_and_confirms_download(tmp_path):
+def test_export_state_cannot_collide_with_output_and_confirms_download(
+    tmp_path: Path,
+) -> None:
     output = tmp_path / 'history.json'
     lb = MagicMock()
     lb.__enter__.return_value = lb
@@ -328,7 +336,9 @@ def test_export_state_cannot_collide_with_output_and_confirms_download(tmp_path)
     assert state['export']['export_id'] == 7
 
 
-def test_existing_archive_without_state_is_preserved_before_api_work(tmp_path):
+def test_existing_archive_without_state_is_preserved_before_api_work(
+    tmp_path: Path,
+) -> None:
     output = tmp_path / 'history.zip'
     output.write_bytes(b'unknown archive')
 
@@ -345,7 +355,9 @@ def test_existing_archive_without_state_is_preserved_before_api_work(tmp_path):
     client.assert_not_called()
 
 
-def test_legacy_export_state_resumes_same_job_and_migrates_download_record(tmp_path):
+def test_legacy_export_state_resumes_same_job_and_migrates_download_record(
+    tmp_path: Path,
+) -> None:
     output = tmp_path / 'history.zip'
     output.write_bytes(b'old archive')
     output.with_suffix('.json').write_text(

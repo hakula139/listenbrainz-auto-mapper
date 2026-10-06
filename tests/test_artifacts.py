@@ -21,9 +21,8 @@ from tests.fixtures import MBID, MSID, api_listen, occurrence, recording
 def test_atomic_write_preserves_a_colliding_input_and_failed_destination(
     tmp_path: Path,
 ) -> None:
-    root = tmp_path
-    output = root / 'actions.json'
-    source = root / 'actions.json.tmp'
+    output = tmp_path / 'actions.json'
+    source = tmp_path / 'actions.json.tmp'
     output.write_text('previous plan')
     source.write_text('input snapshot')
     write_json({'user': 'user'}, output)
@@ -40,16 +39,15 @@ def test_atomic_write_preserves_a_colliding_input_and_failed_destination(
 
     assert json.loads(output.read_text()) == {'user': 'user'}
     assert source.read_text() == 'input snapshot'
-    assert set(root.iterdir()) == {source, output}
+    assert set(tmp_path.iterdir()) == {source, output}
 
 
 @pytest.mark.parametrize('offset', ([], None, True, -1, '100'))
 def test_invalid_offsets_fail_before_requests_and_journal_repair(
     tmp_path: Path, offset: object
 ) -> None:
-    root = tmp_path
-    source = root / 'queries.json'
-    output = root / 'musicbrainz.jsonl'
+    source = tmp_path / 'queries.json'
+    output = tmp_path / 'musicbrainz.jsonl'
     source.write_text(
         json.dumps(
             [{'query': 'Title', 'offset': 0}, {'query': 'Title', 'offset': offset}]
@@ -86,9 +84,8 @@ def test_invalid_offsets_fail_before_requests_and_journal_repair(
 def test_search_rejects_invalid_queries_before_requests_or_journal_writes(
     tmp_path: Path, query: object
 ) -> None:
-    root = tmp_path
-    source = root / 'queries.json'
-    output = root / 'musicbrainz.jsonl'
+    source = tmp_path / 'queries.json'
+    output = tmp_path / 'musicbrainz.jsonl'
     source.write_text(
         json.dumps(
             [
@@ -124,11 +121,10 @@ def test_search_rejects_invalid_queries_before_requests_or_journal_writes(
 
 
 def test_prepare_requires_canonical_journal_before_writing_plan(tmp_path: Path) -> None:
-    root = tmp_path
-    snapshot = root / 'snapshot.json'
-    decisions = root / 'decisions.json'
-    journal = root / 'musicbrainz.jsonl'
-    output = root / 'actions.json'
+    snapshot = tmp_path / 'snapshot.json'
+    decisions = tmp_path / 'decisions.json'
+    journal = tmp_path / 'musicbrainz.jsonl'
+    output = tmp_path / 'actions.json'
     snapshot.write_text(json.dumps({'user': 'user', 'unlinked': [occurrence()]}))
     decisions.write_text(
         json.dumps(
