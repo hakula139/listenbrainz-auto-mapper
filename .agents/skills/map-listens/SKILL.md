@@ -82,7 +82,7 @@ Every proposed deletion and classical substitution receives the coordinating age
 
 ## Decisions and execution
 
-Write `decisions.json` as an array with exactly one entry for every snapshot MSID. Each entry contains `recording_msid`, `verdict`, `reason`, and `evidence` pointing to the completed queries and identity sources.
+Write `decisions.json` as an array with exactly one entry for every snapshot MSID. Each entry contains `recording_msid`, `verdict`, `reason`, and `evidence` pointing to the completed queries and identity sources. Join snapshots, queries, lookups, and decisions by `recording_msid`. Their array positions can differ. Derive source IDs from the matching snapshot object and target IDs from returned recording objects.
 
 - `link`: acceptable recording identity, with `recording_mbid`.
 - `substitute`: same classical work / movement / arrangement with another performer, with `recording_mbid` and the substitution rationale.
