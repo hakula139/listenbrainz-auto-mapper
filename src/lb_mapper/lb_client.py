@@ -5,16 +5,20 @@ from __future__ import annotations
 import time
 import types
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import httpx
+
+from lb_mapper import USER_AGENT
 
 
 __all__ = ['Listen', 'ListenBrainzClient']
 
 BASE_URL = 'https://api.listenbrainz.org'
 _API_PAGE_LIMIT = 100
+_MAX_PAGE_LIMIT = 1000
 _MAX_ATTEMPTS = 3
 
 
@@ -28,25 +32,31 @@ class Listen:
     track_name: str
     release_name: str
     mbid_mapping: dict[str, Any] | None
+    additional_info: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def recording_mbid(self) -> str | None:
+        return self.additional_info.get('recording_mbid') or (
+            (self.mbid_mapping or {}).get('recording_mbid')
+        )
 
     @property
     def is_linked(self) -> bool:
-        return self.mbid_mapping is not None
+        return bool(self.recording_mbid)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> Listen:
         tm = data['track_metadata']
-        additional = tm.get('additional_info', {})
+        additional = tm.get('additional_info') or {}
         return cls(
             listened_at=data['listened_at'],
-            recording_msid=additional.get(
-                'recording_msid',
-                data.get('recording_msid', ''),
-            ),
+            recording_msid=data.get('recording_msid')
+            or additional.get('recording_msid', ''),
             artist_name=tm.get('artist_name', ''),
             track_name=tm.get('track_name', ''),
-            release_name=tm.get('release_name', ''),
+            release_name=tm.get('release_name') or '',
             mbid_mapping=tm.get('mbid_mapping'),
+            additional_info=additional,
         )
 
 
@@ -55,7 +65,7 @@ class ListenBrainzClient:
         self._client = httpx.Client(
             transport=httpx.HTTPTransport(retries=3),
             base_url=BASE_URL,
-            headers={'Authorization': f'Token {token}'},
+            headers={'Authorization': f'Token {token}', 'User-Agent': USER_AGENT},
             timeout=30.0,
         )
 
@@ -75,10 +85,12 @@ class ListenBrainzClient:
 
         Paginates through the API transparently, deduplicating across page
         boundaries where listens share the same ``listened_at`` timestamp.
+        Raises RuntimeError if a timestamp saturates the API's largest page.
         """
         seen: set[tuple[int, str]] = set()
+        page_limit = _API_PAGE_LIMIT
         while True:
-            params: dict[str, Any] = {'count': _API_PAGE_LIMIT}
+            params: dict[str, Any] = {'count': page_limit}
             if max_ts is not None:
                 params['max_ts'] = max_ts
 
@@ -96,8 +108,17 @@ class ListenBrainzClient:
                     yield listen
                     added = True
 
-            if not added:
+            if len(listens_data) < page_limit:
                 return
+
+            if not added:
+                if page_limit == _MAX_PAGE_LIMIT:
+                    raise RuntimeError(
+                        'A timestamp fills the maximum ListenBrainz page. '
+                        'Use a listen export to avoid omitting history.'
+                    )
+                page_limit = min(page_limit * 2, _MAX_PAGE_LIMIT)
+                continue
 
             # Prune: only entries at the boundary timestamp can reappear
             # on the next page, so discard the rest to bound memory usage.
@@ -112,6 +133,8 @@ class ListenBrainzClient:
         self, user: str, count: int = 50, max_ts: int | None = None
     ) -> list[Listen]:
         """Fetch *count* recent listens."""
+        if count < 1:
+            raise ValueError('count must be positive')
         result: list[Listen] = []
         for listen in self.iter_listens(user, max_ts):
             result.append(listen)
@@ -139,18 +162,100 @@ class ListenBrainzClient:
             },
         )
 
+    def validate_token(self, user: str) -> None:
+        data = self._request('GET', '/1/validate-token').json()
+        if not data['valid'] or data['user_name'] != user:
+            raise ValueError('LB_TOKEN does not belong to the requested LB_USER')
+
+    def get_manual_mapping(self, recording_msid: str) -> str | None:
+        try:
+            resp = self._request(
+                'GET',
+                '/1/metadata/get_manual_mapping/',
+                params={'recording_msid': recording_msid},
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return None
+            raise
+        mbid: str = resp.json()['mapping']['recording_mbid']
+        return mbid
+
+    def get_listen(
+        self, user: str, listened_at: int, recording_msid: str
+    ) -> Listen | None:
+        """Find one occurrence, detecting a saturated timestamp page."""
+        for count in (100, _MAX_PAGE_LIMIT):
+            resp = self._request(
+                'GET',
+                f'/1/user/{user}/listens',
+                params={'count': count, 'max_ts': listened_at + 1},
+            )
+            items = resp.json()['payload']['listens']
+            for item in items:
+                listen = Listen.from_api(item)
+                if (listen.listened_at, listen.recording_msid) == (
+                    listened_at,
+                    recording_msid,
+                ):
+                    return listen
+            if len(items) < count or items[-1]['listened_at'] < listened_at:
+                return None
+        raise RuntimeError('Cannot resolve this occurrence in a saturated page')
+
+    def list_exports(self) -> list[dict[str, Any]]:
+        data: list[dict[str, Any]] = self._request('GET', '/1/export/list').json()
+        return data
+
+    def request_export(self) -> dict[str, Any]:
+        data: dict[str, Any] = self._request('POST', '/1/export/').json()
+        return data
+
+    def get_export(self, export_id: int) -> dict[str, Any]:
+        data: dict[str, Any] = self._request('GET', f'/1/export/{export_id}').json()
+        return data
+
+    def download_export(self, export_id: int, path: Path) -> None:
+        time.sleep(1.1)
+        temporary = path.with_suffix(path.suffix + '.tmp')
+        with self._client.stream(
+            'GET',
+            f'/1/export/{export_id}/download',
+            timeout=120.0,
+            follow_redirects=True,
+        ) as resp:
+            resp.raise_for_status()
+            with temporary.open('wb') as stream:
+                for chunk in resp.iter_bytes():
+                    stream.write(chunk)
+        temporary.replace(path)
+
     def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
-        """Make an HTTP request with rate-limit awareness and 429 retry."""
+        """Pace requests and retry throttling or transient failures of safe reads."""
         retries_left = _MAX_ATTEMPTS
         while True:
-            resp = self._client.request(method, url, **kwargs)
             retries_left -= 1
-            if resp.status_code != 429 or retries_left <= 0:
-                break
-            self._sleep_for_reset(resp)
-        resp.raise_for_status()
-        self._sleep_if_near_limit(resp)
-        return resp
+            time.sleep(1.1)
+            try:
+                resp = self._client.request(method, url, **kwargs)
+            except httpx.TransportError:
+                if method != 'GET' or retries_left <= 0:
+                    raise
+                time.sleep(_MAX_ATTEMPTS - retries_left)
+                continue
+            if resp.status_code == 429 and retries_left > 0:
+                self._sleep_for_reset(resp)
+                continue
+            if (
+                method == 'GET'
+                and resp.status_code in (500, 502, 503, 504)
+                and retries_left > 0
+            ):
+                time.sleep(_MAX_ATTEMPTS - retries_left)
+                continue
+            resp.raise_for_status()
+            self._sleep_if_near_limit(resp)
+            return resp
 
     def _sleep_for_reset(self, resp: httpx.Response) -> None:
         """Sleep until the rate-limit window resets."""

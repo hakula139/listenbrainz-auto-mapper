@@ -1,57 +1,54 @@
 # lb-mapper
 
-Automatically map unlinked [ListenBrainz](https://listenbrainz.org/) listens to [MusicBrainz](https://musicbrainz.org/) recordings.
+Map unlinked [ListenBrainz](https://listenbrainz.org/) listens to [MusicBrainz](https://musicbrainz.org/) recordings and clean up listens that remain unmatched after research and final review.
 
-## Why
+## How it works
 
-ListenBrainz listens submitted by third-party scrobblers (Apple Music, Spotify, etc.) often lack MusicBrainz recording IDs, leaving them "unlinked". Linking them manually through the web UI is tedious. This tool automates the process: it searches for matches, uses LLM reasoning to evaluate correctness (including tricky classical music and CJK artist names), and submits approved mappings.
+The shared [map-listens skill](.agents/skills/map-listens/SKILL.md) runs in Codex or Claude Code. Python handles API operations and records, while the coordinating assistant researches recording identity and reviews the decisions.
 
-## How It Works
+1. Collect the requested number of recent unlinked listens, preserving source metadata.
+2. Group repeated recording MSIDs and gather candidates from LB Labs and MusicBrainz.
+3. Recover missing matches with verified aliases, localized titles, and catalog queries.
+4. Review every decision. Classical listens can use another performer's recording of the same work and movement. Unresolved listens are deletion candidates after the search is complete.
+5. Apply actions within the user's authorization and verify the results. Linking preserves submitted metadata. Deletions are scheduled by ListenBrainz and need a later absence check.
 
-The matching intelligence lives in a [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill (`/map-listens`), not in hardcoded heuristics. The Python code provides thin API wrappers; the LLM handles evaluation.
-
-**Pipeline:**
-
-1. Fetch recent listens and filter to unlinked ones
-2. Translate CJK artist names to English (with a local cache)
-3. Search [LB Labs](https://labs.api.listenbrainz.org/) (Typesense) for recording matches
-4. LLM evaluates each match using domain rules (classical catalog numbers, artist disambiguation, arrangement annotations, etc.)
-5. Present results for user approval
-6. Submit approved mappings / delete bad listens
-
-See [`.claude/skills/map-listens/SKILL.md`](.claude/skills/map-listens/SKILL.md) for the full procedure.
+Large history scans use the official ListenBrainz export API. Snapshots, candidate searches, review evidence, and execution results are saved under the ignored `runs/` directory. Successful searches can be resumed without repeating requests. Native subagents can research independent groups, and ACP is optional for consulting another assistant.
 
 ## Requirements
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-- (Optional) [Codex](https://openai.com/index/codex/) MCP — offloads CJK artist name translation and parallel batch evaluation. Without it, Claude Code handles both directly using its own subagents.
+- Codex or Claude Code
 - A [ListenBrainz API token](https://listenbrainz.org/settings/)
 
 ## Setup
 
 ```bash
-git clone https://github.com/hakula/listenbrainz-auto-mapper.git
+git clone https://github.com/hakula139/listenbrainz-auto-mapper.git
 cd listenbrainz-auto-mapper
 uv sync
 cp .env.example .env
-# Edit .env and fill in your ListenBrainz username and token
+# Set LB_USER and LB_TOKEN in .env
 ```
 
 ## Usage
 
-Inside Claude Code, from the repo root:
+From the repo root, ask Codex to use `$map-listens` and specify the number of unlinked listens. Claude Code exposes the same skill as `/map-listens`:
 
 ```text
-/map-listens        # find and process 100 unlinked listens
-/map-listens 500    # find and process 500 unlinked listens
+$map-listens collect and process 5000 unlinked listens
+/map-listens 5000
 ```
+
+The count is the number of listen occurrences, so repeated tracks can yield fewer distinct mapping decisions. The assistant handles final review. State whether it may submit mappings and delete unmatched listens, or whether you want a proposal first.
+
+For direct CLI use, the skill documents the file formats and commands. The execution helper validates a plan by default and requires `--apply` to mutate the account.
 
 ## Development
 
 ```bash
 uv sync --group dev
 uv run pre-commit install
+uv run python -m unittest discover -s tests
 uv run pre-commit run --all-files
 ```
