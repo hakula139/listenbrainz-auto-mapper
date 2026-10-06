@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from contextlib import redirect_stderr
 from io import StringIO
+from pathlib import Path
 from unittest.mock import patch
 from zipfile import ZipFile
 
@@ -17,7 +18,9 @@ from lb_mapper.history import iter_export
 from tests.fixtures import MBID, MSID, api_listen, occurrence, recording
 
 
-def test_atomic_write_preserves_a_colliding_input_and_failed_destination(tmp_path):
+def test_atomic_write_preserves_a_colliding_input_and_failed_destination(
+    tmp_path: Path,
+) -> None:
     root = tmp_path
     output = root / 'actions.json'
     source = root / 'actions.json.tmp'
@@ -41,7 +44,9 @@ def test_atomic_write_preserves_a_colliding_input_and_failed_destination(tmp_pat
 
 
 @pytest.mark.parametrize('offset', ([], None, True, -1, '100'))
-def test_invalid_offsets_fail_before_requests_and_journal_repair(tmp_path, offset):
+def test_invalid_offsets_fail_before_requests_and_journal_repair(
+    tmp_path: Path, offset: object
+) -> None:
     root = tmp_path
     source = root / 'queries.json'
     output = root / 'musicbrainz.jsonl'
@@ -79,8 +84,8 @@ def test_invalid_offsets_fail_before_requests_and_journal_repair(tmp_path, offse
 
 @pytest.mark.parametrize('query', ('', '   ', None, 123))
 def test_search_rejects_invalid_queries_before_requests_or_journal_writes(
-    tmp_path, query
-):
+    tmp_path: Path, query: object
+) -> None:
     root = tmp_path
     source = root / 'queries.json'
     output = root / 'musicbrainz.jsonl'
@@ -118,7 +123,7 @@ def test_search_rejects_invalid_queries_before_requests_or_journal_writes(
     search.assert_not_called()
 
 
-def test_prepare_requires_canonical_journal_before_writing_plan(tmp_path):
+def test_prepare_requires_canonical_journal_before_writing_plan(tmp_path: Path) -> None:
     root = tmp_path
     snapshot = root / 'snapshot.json'
     decisions = root / 'decisions.json'
@@ -173,7 +178,9 @@ def test_prepare_requires_canonical_journal_before_writing_plan(tmp_path):
     ]
 
 
-def test_resume_repairs_partial_tail_and_preserves_complete_rows(tmp_path):
+def test_resume_repairs_partial_tail_and_preserves_complete_rows(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / 'rows.jsonl'
     path.write_bytes(b'{"status":"ok"}\n{"status":"')
     repair_jsonl(path)
@@ -191,7 +198,7 @@ def test_resume_repairs_partial_tail_and_preserves_complete_rows(tmp_path):
         repair_jsonl(path)
 
 
-def test_export_orders_numeric_months_and_normalizes_times(tmp_path):
+def test_export_orders_numeric_months_and_normalizes_times(tmp_path: Path) -> None:
     path = tmp_path / 'history.zip'
 
     with ZipFile(path, 'w') as archive:
