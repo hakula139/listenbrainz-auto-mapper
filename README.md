@@ -49,6 +49,6 @@ For direct CLI use, the skill documents the file formats and commands. The execu
 ```bash
 uv sync --group dev
 uv run pre-commit install
-uv run python -m unittest discover -s tests
 uv run pre-commit run --all-files
+uv run pytest -q
 ```

@@ -20,6 +20,7 @@ dev = [
     "bandit>=1.9.4",
     "mypy>=2.4.0",
     "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
     "ruff>=0.16.10",
 ]
 
@@ -38,6 +39,10 @@ select = ["B", "C4", "E", "F", "I", "SIM", "UP", "W"]
 lines-after-imports = 2
 split-on-trailing-comma = true
 combine-as-imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
 
 [tool.mypy]
 strict = true

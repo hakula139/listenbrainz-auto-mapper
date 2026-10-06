@@ -29,14 +29,11 @@ A recording MSID can occur many times. A mapping applies to that MSID, while del
 
 Use Python 3.12+, `uv`, single quotes, and the existing Ruff configuration. Keep runtime dependencies limited to `httpx` and `python-dotenv`. Each API module owns its HTTP client.
 
-Run relevant behavioral tests when changing the API or execution contracts, then check:
+Run pre-commit before the behavioral tests:
 
 ```bash
-uv run python -m unittest discover -s tests
-uv run ruff check src/ tests/
-uv run ruff format --check src/ tests/
-uv run mypy src/lb_mapper/ --strict
 uv run pre-commit run --all-files
+uv run pytest -q
 ```
 
 Commits use `type(scope): description`, with an optional scope. Load the shared Git Workflow skill for commits and publication.
