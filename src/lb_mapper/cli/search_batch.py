@@ -1,59 +1,104 @@
-"""Batch search LB Labs for recording matches.
-
-Reads a JSON array of {artist, track, release, original_artist} objects
-from stdin.  For each, searches LB Labs (Typesense) and returns structured
-results.
-
-If ``original_artist`` contains CJK characters and the translated-name
-search returns no results, the script retries with the original name.
-
-Usage:
-    echo '[...]' | uv run python -m lb_mapper.cli.search_batch
-"""
+"""Search unique MSIDs or explicit queries, streaming resumable JSONL results."""
 
 from __future__ import annotations
 
-import json
+import argparse
 import sys
-from dataclasses import asdict
+from contextlib import nullcontext
+from pathlib import Path
 from typing import Any
 
-from lb_mapper.lb_search import contains_cjk, search_recording
+import httpx
+
+from lb_mapper import mb_search
+from lb_mapper.cli import read_json, validate_paths
+from lb_mapper.cli.search_journal import SearchJournal
+from lb_mapper.lb_search import search_recording
+from lb_mapper.review import group_listens, uuid_string
 
 
-def _search_one(item: dict[str, str]) -> dict[str, Any]:
-    artist = item.get('artist', '')
-    track = item.get('track', '')
-    original_artist = item.get('original_artist', '')
+def _query(item: dict[str, Any], source: str) -> str:
+    if source == 'labs':
+        return f'{item["artist"]} {item["track"]}'.strip()
+    if item.get('recording_mbid'):
+        return uuid_string(item['recording_mbid'])
+    return item.get('query') or mb_search.recording_query(item['artist'], item['track'])
 
-    results = search_recording(artist=artist, recording=track)
 
-    # Retry with the original CJK name if translation yielded nothing.
-    if not results and original_artist and contains_cjk(original_artist):
-        results = search_recording(artist=original_artist, recording=track)
+def _entry(item: dict[str, Any], source: str) -> dict[str, Any]:
+    query = _query(item, source)
+    operation = (
+        'lookup' if source == 'musicbrainz' and item.get('recording_mbid') else 'search'
+    )
+    return {**item, 'source': source, 'operation': operation, 'query': query}
 
-    return {
-        **item,
-        'results': [asdict(m) for m in results],
-    }
+
+def _search_one(item: dict[str, Any], source: str) -> dict[str, Any]:
+    entry = _entry(item, source)
+    query = entry['query']
+
+    try:
+        if source == 'labs':
+            results = search_recording(item['artist'], item['track'])
+        elif item.get('recording_mbid'):
+            results = [mb_search.lookup_recording(query)]
+        else:
+            page = mb_search.search_recordings(query, item.get('offset', 0))
+            results = page['recordings']
+            entry.update(result_count=page['count'], result_offset=page['offset'])
+
+            next_offset = page['offset'] + len(results)
+            if next_offset < page['count']:
+                entry['next_offset'] = next_offset
+
+        entry.update(status='ok', results=results)
+    except (httpx.HTTPError, ValueError, KeyError) as exc:
+        entry.update(status='error', error=f'{type(exc).__name__}: {exc}')
+
+    return entry
 
 
 def main() -> None:
-    items: list[dict[str, str]] = json.loads(sys.stdin.read())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--input', type=Path)
+    parser.add_argument('--output', type=Path)
+    parser.add_argument('--source', choices=('labs', 'musicbrainz'), default='labs')
+    args = parser.parse_args()
+    validate_paths(parser, args.input, args.output)
 
-    output: list[dict[str, Any]] = []
-    for i, item in enumerate(items, 1):
-        entry = _search_one(item)
-        output.append(entry)
-        print(
-            f'[{i}/{len(items)}] '
-            f'{item.get("artist", "")} — {item.get("track", "")} '
-            f'-> {len(entry["results"])} results',
-            file=sys.stderr,
-            flush=True,
-        )
+    data = read_json(args.input)
+    items = group_listens(data['unlinked']) if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        parser.error('input must be a listen snapshot or an array of queries')
 
-    json.dump(output, sys.stdout, ensure_ascii=False)
+    entries = [_entry(item, args.source) for item in items]
+    journal = SearchJournal(args.output, args.source)
+
+    failed = False
+    context = args.output.open('a') if args.output else nullcontext(sys.stdout)
+    with context as stream:
+        for i, entry in enumerate(entries, 1):
+            if journal.is_complete(entry):
+                continue
+
+            outcome = journal.cached(entry)
+            if outcome is not None:
+                entry.update(outcome)
+            else:
+                entry = _search_one(entry, args.source)
+
+            journal.record(entry, stream)
+            failed |= entry['status'] == 'error'
+            print(
+                f'[{i}/{len(items)}] {entry.get("artist", "")} / '
+                f'{entry.get("track", entry["query"])}: {entry["status"]}, '
+                f'{len(entry.get("results", []))} candidates',
+                file=sys.stderr,
+                flush=True,
+            )
+
+    if failed:
+        raise SystemExit(1)
 
 
 if __name__ == '__main__':

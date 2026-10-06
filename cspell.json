@@ -11,5 +11,5 @@
     }
   ],
   "dictionaries": ["project-words"],
-  "ignorePaths": ["uv.lock", ".claude/"]
+  "ignorePaths": ["uv.lock", ".agents/skills/"]
 }

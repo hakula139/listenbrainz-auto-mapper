@@ -1,40 +1,47 @@
-"""Fetch recent listens and output unlinked ones as JSON.
-
-Paginates until *count* unlinked listens are found (or history is
-exhausted).
-
-Usage:
-    uv run python -m lb_mapper.cli.fetch_listens [count]
-
-Outputs JSON to stdout:
-    {"total": N, "linked": N, "unlinked": [...]}
-"""
+"""Collect recent unlinked listens, preserving submitted metadata."""
 
 from __future__ import annotations
 
-import json
+import argparse
 import sys
+from contextlib import ExitStack
+from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 
-from lb_mapper.cli import require_env
+from lb_mapper.cli import require_env, validate_paths, write_json
+from lb_mapper.history import iter_export
 from lb_mapper.lb_client import ListenBrainzClient
+from lb_mapper.review import uuid_string
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('count', type=int, nargs='?', default=100)
+    parser.add_argument('--output', type=Path)
+    parser.add_argument('--export', dest='archive', type=Path)
+    args = parser.parse_args()
+    validate_paths(parser, args.archive, args.output)
+
+    if args.count < 1:
+        parser.error('count must be positive')
+
     load_dotenv()
-    token = require_env('LB_TOKEN')
     user = require_env('LB_USER')
-
-    count = int(sys.argv[1]) if len(sys.argv) > 1 else 100
-
     unlinked: list[dict[str, Any]] = []
     total = 0
     linked = 0
 
-    with ListenBrainzClient(token) as lb:
-        for listen in lb.iter_listens(user):
+    with ExitStack() as stack:
+        if args.archive:
+            listens = iter_export(args.archive, user)
+        else:
+            lb = stack.enter_context(ListenBrainzClient(require_env('LB_TOKEN')))
+            lb.validate_token(user)
+            listens = lb.iter_listens(user)
+
+        for listen in listens:
             total += 1
             if listen.is_linked:
                 linked += 1
@@ -42,25 +49,34 @@ def main() -> None:
                 unlinked.append(
                     {
                         'listened_at': listen.listened_at,
-                        'recording_msid': listen.recording_msid,
+                        'recording_msid': uuid_string(listen.recording_msid),
                         'artist': listen.artist_name,
                         'track': listen.track_name,
                         'release': listen.release_name,
+                        'additional_info': listen.additional_info,
+                        'mbid_mapping': listen.mbid_mapping,
                     }
                 )
-                if len(unlinked) >= count:
+                if len(unlinked) >= args.count:
                     break
 
-    json.dump(
+            if total % 1000 == 0:
+                print(
+                    f'Scanned {total}, found {len(unlinked)} unlinked',
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+    write_json(
         {
+            'user': user,
+            'requested': args.count,
             'total': total,
             'linked': linked,
             'unlinked': unlinked,
         },
-        sys.stdout,
-        ensure_ascii=False,
+        args.output,
     )
-
     print(
         f'Scanned {total}, {linked} linked, {len(unlinked)} unlinked',
         file=sys.stderr,

@@ -25,7 +25,6 @@ repos:
       - id: ruff-check
         args:
           - --fix
-          - --unsafe-fixes
       - id: ruff-format
 
   # Python security linting with bandit
