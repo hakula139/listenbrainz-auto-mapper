@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-from lb_mapper import USER_AGENT
+from lb_mapper import LB_REQUEST_INTERVAL, USER_AGENT
 
 
 __all__ = ['lookup_recordings', 'search_recording']
@@ -34,7 +34,7 @@ def lookup_recordings(
     pairs: list[tuple[str, str]],
 ) -> list[list[dict[str, Any]]]:
     """Return canonical candidates per input. Missing indices remain empty."""
-    time.sleep(1.1)
+    time.sleep(LB_REQUEST_INTERVAL)
     resp = _get_client().post(
         '/acr-lookup/json',
         json=[
@@ -71,7 +71,7 @@ def search_recording(artist: str, recording: str) -> list[dict[str, Any]]:
     if not query or len(query) > _MAX_QUERY_LEN:
         raise ValueError('LB Labs query must contain 1 to 200 characters')
 
-    time.sleep(1.1)
+    time.sleep(LB_REQUEST_INTERVAL)
     resp = _get_client().post('/recording-search/json', json=[{'query': query}])
     resp.raise_for_status()
 
