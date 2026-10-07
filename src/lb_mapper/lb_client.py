@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from lb_mapper import USER_AGENT
+from lb_mapper import LB_REQUEST_INTERVAL, USER_AGENT
 from lb_mapper.artifacts import atomic_path
 from lb_mapper.validation import uuid_string
 
@@ -256,7 +256,7 @@ class ListenBrainzClient:
         return data
 
     def download_export(self, export_id: int, path: Path) -> None:
-        time.sleep(1.1)
+        time.sleep(LB_REQUEST_INTERVAL)
         with (
             atomic_path(path) as temporary,
             self._client.stream(
@@ -298,7 +298,7 @@ class ListenBrainzClient:
 
         while True:
             retries_left -= 1
-            time.sleep(1.1)
+            time.sleep(LB_REQUEST_INTERVAL)
 
             try:
                 resp = self._client.request(method, url, **kwargs)

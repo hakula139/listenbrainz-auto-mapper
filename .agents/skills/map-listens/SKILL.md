@@ -26,7 +26,9 @@ uv run --no-sync python -m lb_mapper.cli.fetch_listens COUNT --output "$run/list
 uv run --no-sync python -m lb_mapper.cli.lookup_batch --input "$run/listens.json" --output "$run/exact.jsonl"
 ```
 
-For large or sparse histories, use an enriched history export. The API recommends exports when a scan would exceed roughly 10,000 listens. An export job can be resumed using its saved state, and exported months are processed newest first:
+Keep ListenBrainz API and Labs requests in one process per run, including health probes and verification. The clients pause for three seconds before each request. During service instability, increase the spacing for the run and avoid concurrent retry loops. Research agents can work from saved artifacts while account operations remain serial.
+
+For large or sparse histories, use an enriched history export. ListenBrainz recommends the export API for complete history and the listens endpoint for recent listens, bounded queries, and incremental updates. An export job can be resumed using its saved state, and exported months are processed newest first:
 
 ```bash
 uv run --no-sync python -m lb_mapper.cli.export_history --output "$run/history.zip"
@@ -100,6 +102,6 @@ uv run --no-sync python -m lb_mapper.cli.execute --input "$run/actions.json" --a
 uv run --no-sync python -m lb_mapper.cli.verify --input "$run/actions.json" --output "$run/verification.jsonl"
 ```
 
-Only the `--apply` command mutates the account. It checks the token owner, rejects conflicting actions, confirms mappings through readback, and rechecks listen / mapping state before scheduling deletions. Re-review conflicts or unexpected state changes. An HTTP failure stops the batch and preserves the failed result. After an ambiguous network failure, inspect account state before retrying.
+Only the `--apply` command mutates the account. It checks the token owner, rejects conflicting actions, confirms mappings through readback, and rechecks listen / mapping state before scheduling deletions. Re-review conflicts or unexpected state changes. An HTTP failure stops the batch and preserves the failed result. Pause account operations until a bounded health check succeeds, then rebuild the remaining plan from execution and verification records. Exclude confirmed mappings and accepted deletion requests. Read back ambiguous mutations before deciding whether to retry them.
 
-Report mapped MSIDs, affected occurrences, substitutions, pending research, errors, and deletion states separately. `scheduled` means ListenBrainz accepted a deletion request. Report a listen as deleted only after verification returns `absent`. Verification appends timestamped observations. Use the latest observation for each mapping MSID or deletion occurrence when reporting current state, including across resumed journals. Verification exits 2 while deletions remain pending, and 1 on errors or mismatched mappings.
+Report mapped MSIDs, affected occurrences, substitutions, pending research, errors, and deletion states separately. `scheduled` means ListenBrainz accepted a deletion request. Deletions usually run shortly after the hour, so immediate readback can remain pending. Report a listen as deleted only after verification returns `absent`. Verification appends timestamped observations. Use the latest observation for each mapping MSID or deletion occurrence when reporting current state, including across resumed journals. Verification exits 2 while deletions remain pending, and 1 on errors or mismatched mappings. See the [ListenBrainz API contract](https://listenbrainz.readthedocs.io/en/latest/users/api/core.html) for history retrieval and deletion timing.
