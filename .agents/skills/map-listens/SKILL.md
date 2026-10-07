@@ -100,9 +100,14 @@ Reconcile all groups against the snapshot. Resolve conflicting choices for one M
 uv run --no-sync python -m lb_mapper.cli.prepare "$run/listens.json" "$run/decisions.json" --recordings "$run/musicbrainz.jsonl" --output "$run/actions.json"
 uv run --no-sync python -m lb_mapper.cli.execute --input "$run/actions.json"
 uv run --no-sync python -m lb_mapper.cli.execute --input "$run/actions.json" --apply --output "$run/execution.jsonl"
-uv run --no-sync python -m lb_mapper.cli.verify --input "$run/actions.json" --output "$run/verification.jsonl"
 ```
 
 Only the `--apply` command mutates the account. It checks the token owner, rejects conflicting actions, confirms mappings through readback, and rechecks listen / mapping state before scheduling deletions. Re-review conflicts or unexpected state changes. An HTTP failure stops the batch and preserves the failed result. Pause account operations until a bounded health check succeeds, then rebuild the remaining plan from execution and verification records. Exclude confirmed mappings and accepted deletion requests. Read back ambiguous mutations before deciding whether to retry them.
+
+Successful deletion submission completes the deployment milestone. Do not wait for queued deletions to disappear unless the user requests confirmed removal. For an independent mapping audit or requested deletion confirmation, run:
+
+```bash
+uv run --no-sync python -m lb_mapper.cli.verify --input "$run/actions.json" --output "$run/verification.jsonl"
+```
 
 Report mapped MSIDs, affected occurrences, substitutions, pending research, errors, and deletion states separately. `scheduled` means ListenBrainz accepted a deletion request. Deletions usually run shortly after the hour, so immediate readback can remain pending. Report a listen as deleted only after verification returns `absent`. Verification appends timestamped observations. Use the latest observation for each mapping MSID or deletion occurrence when reporting current state, including across resumed journals. Verification exits 2 while deletions remain pending, and 1 on errors or mismatched mappings. See the [ListenBrainz API contract](https://listenbrainz.readthedocs.io/en/latest/users/api/core.html) for history retrieval and deletion timing.
