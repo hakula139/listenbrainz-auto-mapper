@@ -72,6 +72,7 @@ For unresolved items, use the recovery angles justified by their metadata:
 - Base titles without storefront album, film, or feature-credit suffixes. Keep version distinctions in the identity review even when simplifying the search query.
 - Simplified multi-artist credits and featured-artist variants. Verify the full credit after retrieval.
 - Direct MusicBrainz queries with distinctive title tokens, release context, ISRC, or classical catalog / movement identifiers. Broaden classical searches to other performers before declaring failure.
+- Search a verified source album with its artist aliases and inspect the returned release track titles and associated recordings. A release track can have a different title from its recording, so a recording-title miss can still have an exact album-track match.
 - Web research on MusicBrainz, the source album page, artist discography, or publisher catalog to resolve naming and work identity.
 
 Record verified aliases with their context and source in the run evidence. Do not infer one-to-one title translations from a flat bidirectional cache.
