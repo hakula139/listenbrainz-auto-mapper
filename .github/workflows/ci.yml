@@ -18,6 +18,7 @@ jobs:
   check:
     name: Python Check
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -37,3 +38,15 @@ jobs:
 
       - name: Test
         run: uv run --no-sync pytest -q
+
+  result:
+    name: CI Result
+    if: ${{ !cancelled() }}
+    needs: [check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - name: Check results
+        uses: hakula139/devkit/actions/ci-result@e0d835ba91cf38c7f6d950c8a56c0d68e74366bd
