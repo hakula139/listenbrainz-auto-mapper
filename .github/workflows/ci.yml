@@ -49,4 +49,4 @@ jobs:
       actions: read
     steps:
       - name: Check results
-        uses: hakula139/devkit/actions/ci-result@v1.0.0-rc.3
+        uses: hakula139/devkit/actions/ci-result@88f619538cc3a79bf223e538504251264e02b4e9
