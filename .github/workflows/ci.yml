@@ -49,4 +49,4 @@ jobs:
       actions: read
     steps:
       - name: Check results
-        uses: hakula139/devkit/.github/actions/ci-result@v1
+        uses: hakula139/devkit/.github/actions/ci-result@v2
