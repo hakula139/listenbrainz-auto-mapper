@@ -36,4 +36,4 @@ uv run pre-commit run --all-files
 uv run pytest -q
 ```
 
-Commits use `type(scope): description`, with an optional scope. Load the shared Git Workflow skill for commits and publication.
+Load the shared Git Workflow skill for commits and publication.
