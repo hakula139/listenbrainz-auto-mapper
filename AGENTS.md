@@ -33,5 +33,5 @@ Account jobs share the main checkout's `.venv`, so never sync or change dependen
 
 ```bash
 nix develop -c run-hooks
-nix develop -c uv run --locked pytest -q
+nix develop -c uv run --locked pytest
 ```
