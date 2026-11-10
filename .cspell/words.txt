@@ -35,4 +35,3 @@ testpaths
 typesense
 venv
 worktree
-worktrees
