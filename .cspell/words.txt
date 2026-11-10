@@ -25,6 +25,7 @@ pycache
 pytest
 pythonpath
 readback
+rels
 romanizations
 shellcheck
 shfmt
@@ -33,6 +34,5 @@ taplo
 testpaths
 typesense
 venv
-work-rels
 worktree
 worktrees
