@@ -46,9 +46,9 @@ For direct CLI use, the skill documents the file formats and commands. The execu
 
 ## Development
 
+The [Nix](https://nixos.org/) dev shell provides Python, uv, and the pre-commit hooks:
+
 ```bash
-uv sync --group dev
-uv run pre-commit install
-uv run pre-commit run --all-files
-uv run pytest -q
+nix develop -c run-hooks
+nix develop -c uv run --locked pytest -q
 ```

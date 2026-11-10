@@ -1,3 +1,4 @@
 {
-  "extends": ["github>hakula139/devkit#v2"]
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["github>hakula139/devkit#v3"]
 }

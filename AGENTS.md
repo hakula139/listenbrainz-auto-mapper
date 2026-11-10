@@ -27,13 +27,11 @@ A recording MSID can occur many times. A mapping applies to that MSID, while del
 
 ## Development
 
-Use Python 3.12+, `uv`, single quotes, and the existing Ruff configuration. Keep runtime dependencies limited to `httpx` and `python-dotenv`. Each API module owns its HTTP client.
+Keep runtime dependencies limited to `httpx` and `python-dotenv`. Each API module owns its HTTP client.
 
-Run pre-commit before the behavioral tests:
+Account jobs share the main checkout's `.venv`, so never sync or change dependencies there while one may be running. Verify changes from a separate worktree with:
 
 ```bash
-uv run pre-commit run --all-files
-uv run pytest -q
+nix develop -c run-hooks
+nix develop -c uv run --locked pytest -q
 ```
-
-Load the shared Git Workflow skill for commits and publication.
