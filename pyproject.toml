@@ -39,6 +39,9 @@ addopts = ["--quiet", "--cov", "--cov-report=term", "--cov-report=xml"]
 strict = true
 testpaths = ["tests"]
 
+[tool.coverage.run]
+source = ["src"]
+
 [tool.mypy]
 files = ["."]
 exclude_gitignore = true
