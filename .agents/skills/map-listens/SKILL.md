@@ -26,7 +26,7 @@ uv run --no-sync python -m lb_mapper.cli.fetch_listens COUNT --output "$run/list
 uv run --no-sync python -m lb_mapper.cli.lookup_batch --input "$run/listens.json" --output "$run/exact.jsonl"
 ```
 
-Keep ListenBrainz API and Labs requests in one process per run, including health probes and verification. During service instability, increase the spacing for the run and avoid concurrent retry loops. Research agents can work from saved artifacts while account operations remain serial.
+Keep ListenBrainz API and Labs requests in one process per run, including health probes and verification. The clients wait `LB_REQUEST_INTERVAL` seconds (`src/lb_mapper/__init__.py`) before each request. During service instability, raise it for the run and avoid concurrent retry loops. Research agents can work from saved artifacts while account operations remain serial.
 
 For large or sparse histories, use an enriched history export. ListenBrainz recommends the export API for complete history and the listens endpoint for recent listens, bounded queries, and incremental updates. An export job can be resumed using its saved state, and exported months are processed newest first:
 
@@ -39,7 +39,7 @@ The search helper groups occurrences by MSID, preserving all occurrences under `
 
 The bulk lookup's canonical normalized candidate still needs identity review. Request echoes and indices establish input routing, while artist, title, version, and release fields establish musical identity. Different raw pairs can collide under server normalization, so a missing row remains unresolved. Do not propagate candidates across merely normalized pairs.
 
-Review lookup candidates, then write unresolved groups to `unresolved.json` as an array of objects or a filtered snapshot and run fuzzy search:
+Review lookup candidates, then write unresolved groups to `unresolved.json` and run fuzzy search. The input is an array of objects with `artist` and `track`, or a snapshot whose `unlinked` array keeps only the unresolved listens:
 
 ```bash
 uv run --no-sync python -m lb_mapper.cli.search_batch --input "$run/unresolved.json" --output "$run/labs.jsonl"
@@ -53,7 +53,7 @@ For recovery queries, write an array of objects to a JSON file. Each object iden
 uv run --no-sync python -m lb_mapper.cli.search_batch --source musicbrainz --input "$run/queries.json" --output "$run/musicbrainz.jsonl"
 ```
 
-An object with `recording_mbid` performs a MusicBrainz lookup with artist credits, releases, ISRCs, and work relationships. Copy target MBIDs from returned records and confirm every selected target with a successful canonical recording lookup before preparing actions. Preparation checks the selected MSID / target pairs against this MusicBrainz JSONL journal. One process owns MusicBrainz requests during a run. Use supported recording-index fields such as `recording`, `artist`, `artistname`, `release`, `isrc`, and `comment`. The recording index has no `composer` or `work` field. Search catalog and movement tokens in `recording`, then inspect work relationships to establish composer identity. An unsupported field returning zero results does not support deletion. See [MusicBrainz search fields](https://musicbrainz.org/doc/MusicBrainz_API/Search).
+An object with `recording_mbid` performs a MusicBrainz lookup with artist credits, releases, ISRCs, and work relationships. A lookup of a merged recording returns its surviving ID, so copy target MBIDs from the returned records and confirm every selected target with a successful canonical recording lookup before preparing actions. Preparation checks the selected MSID / target pairs against this MusicBrainz JSONL journal. One process owns MusicBrainz requests during a run. Use supported recording-index fields such as `recording`, `artist`, `artistname`, `release`, `isrc`, and `comment`. The recording index has no `composer` or `work` field. Search catalog and movement tokens in `recording`, then inspect work relationships to establish composer identity. An unsupported field returning zero results does not support deletion. See [MusicBrainz search fields](https://musicbrainz.org/doc/MusicBrainz_API/Search).
 
 Search records retain `result_count`, `result_offset`, and `next_offset` when further results exist. Narrow a broad query or request another page using its `offset` before concluding that no acceptable candidate exists.
 
@@ -102,7 +102,7 @@ uv run --no-sync python -m lb_mapper.cli.execute --input "$run/actions.json"
 uv run --no-sync python -m lb_mapper.cli.execute --input "$run/actions.json" --apply --output "$run/execution.jsonl"
 ```
 
-Only the `--apply` command mutates the account. Re-review conflicts or unexpected state changes. An HTTP failure stops the batch and preserves the failed result. Pause account operations until a bounded health check succeeds, then rebuild the remaining plan from execution and verification records. Exclude confirmed mappings and accepted deletion requests. Read back ambiguous mutations before deciding whether to retry them.
+Only the `--apply` command mutates the account. It checks the token owner and rejects conflicting mappings or changed listen / mapping state, so re-review those before rebuilding the plan. An HTTP failure stops the batch and preserves the failed result. Pause account operations until a bounded health check succeeds, then rebuild the remaining plan from execution and verification records. Exclude confirmed mappings and accepted deletion requests. Read back ambiguous mutations before deciding whether to retry them.
 
 Successful deletion submission completes the deployment milestone. Do not wait for queued deletions to disappear unless the user requests confirmed removal. For an independent mapping audit or requested deletion confirmation, run:
 

@@ -26,7 +26,7 @@ Large history scans use the official ListenBrainz export API. Snapshots, candida
 ```bash
 git clone https://github.com/hakula139/listenbrainz-auto-mapper.git
 cd listenbrainz-auto-mapper
-uv sync
+uv sync --locked
 cp .env.example .env
 # Set LB_USER and LB_TOKEN in .env
 ```
@@ -42,13 +42,4 @@ $map-listens collect and process 5000 unlinked listens
 
 The count is the number of listen occurrences, so repeated tracks can yield fewer distinct mapping decisions. The assistant handles final review. State whether it may submit mappings and delete unmatched listens, or whether you want a proposal first.
 
-For direct CLI use, the skill documents the file formats and commands. The execution helper validates a plan by default and requires `--apply` to mutate the account.
-
-## Development
-
-The [Nix](https://nixos.org/) dev shell provides Python, uv, and the pre-commit hooks:
-
-```bash
-nix develop -c run-hooks
-nix develop -c uv run --locked pytest -q
-```
+For direct CLI use, the skill lists each command with the inputs it expects. The execution helper validates a plan by default and requires `--apply` to mutate the account.

@@ -1,6 +1,6 @@
 # AGENTS.md: lb-mapper
 
-lb-mapper maps unlinked ListenBrainz listens to MusicBrainz recordings through the `map-listens` skill in `.agents/skills`, which `.claude/skills` links to.
+lb-mapper maps unlinked ListenBrainz listens to MusicBrainz recordings through the `map-listens` skill in `.agents/skills`.
 
 ## Responsibilities
 
@@ -20,7 +20,7 @@ A recording MSID can occur many times. A mapping applies to that MSID, while del
 ## Contracts
 
 - Fail on malformed external responses. Search outages must remain distinguishable from a successful search with no results.
-- Validate the complete action batch before making requests. Check the configured user against the token owner before mutations.
+- `execute` validates the complete action batch before any request, and `--apply` checks that the configured user owns the token before mutating the account.
 - API acceptance of a deletion means it was scheduled. Confirm absence before reporting it as deleted.
 - Runtime snapshots and review evidence belong in the ignored `runs/` directory. Never write tokens to these artifacts.
 - `.env` is private. Check or consume credentials without printing their values.
