@@ -12,7 +12,7 @@ The shared [map-listens skill](.agents/skills/map-listens/SKILL.md) runs in Code
 4. Review every decision. Classical listens can use another performer's recording of the same work and movement. Unresolved listens are deletion candidates after the search is complete.
 5. Apply actions within the user's authorization and verify the results. Linking preserves submitted metadata. Deletions are scheduled by ListenBrainz and need a later absence check.
 
-Large history scans use the official ListenBrainz export API. Snapshots, candidate searches, review evidence, and execution results are saved under the ignored `runs/` directory. Successful searches can be resumed without repeating requests. Native subagents can research independent groups, and ACP is optional for consulting another assistant.
+Large history scans use the official ListenBrainz export API. Snapshots, candidate searches, review evidence, and execution results are saved under the ignored `runs/` directory. Successful searches can be resumed without repeating requests.
 
 ## Requirements
 

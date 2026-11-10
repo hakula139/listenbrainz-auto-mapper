@@ -1,6 +1,6 @@
 # AGENTS.md: lb-mapper
 
-Project-specific instructions for any coding assistant working in this repository. `CLAUDE.md` links to this file, and `.claude/skills` links to `.agents/skills`.
+lb-mapper maps unlinked ListenBrainz listens to MusicBrainz recordings through the `map-listens` skill in `.agents/skills`, which `.claude/skills` links to.
 
 ## Responsibilities
 

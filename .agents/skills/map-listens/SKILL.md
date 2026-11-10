@@ -5,7 +5,7 @@ description: Research, link, and clean up unlinked ListenBrainz listens using re
 
 # Map Listens
 
-Collect and process recent unlinked listen occurrences for `LB_USER`, using `LB_TOKEN` from `.env`. Count defaults to 100. Codex coordinates directly, and Claude Code can use the same procedure.
+Collect and process recent unlinked listen occurrences for `LB_USER`, using `LB_TOKEN` from `.env`. Count defaults to 100.
 
 ## Authorization and review
 
@@ -17,7 +17,7 @@ For classical music, another performer's recording is acceptable when it represe
 
 ## Run artifacts and commands
 
-Initialize the locked environment once with `uv sync --locked`, then run Python with `uv run --no-sync` from the repo root. Parallel workers must share that initialized environment without syncing dependencies during active jobs. Use an isolated `UV_PROJECT_ENVIRONMENT` for dependency edits and verification while account jobs run. Create an ignored `runs/<run-name>/` directory. Keep the snapshot, query results, evidence, decisions, action plan, and execution / verification records there.
+Initialize the locked environment once with `uv sync --locked`, then run Python with `uv run --no-sync` from the repo root. Parallel workers must share that initialized environment without syncing dependencies during active jobs. Create an ignored `runs/<run-name>/` directory. Keep the snapshot, query results, evidence, decisions, action plan, and execution / verification records there.
 
 ```bash
 run=runs/<run-name>
@@ -26,7 +26,7 @@ uv run --no-sync python -m lb_mapper.cli.fetch_listens COUNT --output "$run/list
 uv run --no-sync python -m lb_mapper.cli.lookup_batch --input "$run/listens.json" --output "$run/exact.jsonl"
 ```
 
-Keep ListenBrainz API and Labs requests in one process per run, including health probes and verification. The clients pause for three seconds before each request. During service instability, increase the spacing for the run and avoid concurrent retry loops. Research agents can work from saved artifacts while account operations remain serial.
+Keep ListenBrainz API and Labs requests in one process per run, including health probes and verification. During service instability, increase the spacing for the run and avoid concurrent retry loops. Research agents can work from saved artifacts while account operations remain serial.
 
 For large or sparse histories, use an enriched history export. ListenBrainz recommends the export API for complete history and the listens endpoint for recent listens, bounded queries, and incremental updates. An export job can be resumed using its saved state, and exported months are processed newest first:
 
@@ -35,9 +35,9 @@ uv run --no-sync python -m lb_mapper.cli.export_history --output "$run/history.z
 uv run --no-sync python -m lb_mapper.cli.fetch_listens COUNT --export "$run/history.zip" --output "$run/listens.json"
 ```
 
-The snapshot contains `{user, requested, total, linked, unlinked}`. Each occurrence retains `listened_at`, `recording_msid`, `artist`, `track`, `release`, `additional_info`, and `mbid_mapping`. The search helper groups occurrences by MSID, preserving all occurrences under `listens`. Review conflicting metadata within a group before selecting one mapping.
+The search helper groups occurrences by MSID, preserving all occurrences under `listens`. Review conflicting metadata within a group before selecting one mapping.
 
-The bulk lookup submits up to 100 original artist / title pairs per request. Its canonical normalized candidate still needs identity review. Request echoes and indices establish input routing, while artist, title, version, and release fields establish musical identity. Different raw pairs can collide under server normalization, so a missing row remains unresolved. Do not propagate candidates across merely normalized pairs.
+The bulk lookup's canonical normalized candidate still needs identity review. Request echoes and indices establish input routing, while artist, title, version, and release fields establish musical identity. Different raw pairs can collide under server normalization, so a missing row remains unresolved. Do not propagate candidates across merely normalized pairs.
 
 Review lookup candidates, then write unresolved groups to `unresolved.json` as an array of objects or a filtered snapshot and run fuzzy search:
 
@@ -45,7 +45,7 @@ Review lookup candidates, then write unresolved groups to `unresolved.json` as a
 uv run --no-sync python -m lb_mapper.cli.search_batch --input "$run/unresolved.json" --output "$run/labs.jsonl"
 ```
 
-Search output is JSONL. Each record includes the input, `source`, `query`, and `status`. Successful records contain `results`, while failed records contain `error`. Reusing the output file resumes successful queries and retries failed ones. Never interpret `status: error` as no match.
+Reusing the search output file resumes successful queries and retries failed ones. Never interpret `status: error` as no match.
 
 For recovery queries, write an array of objects to a JSON file. Each object identifies its `recording_msid` and either `artist` / `track` or an explicit MusicBrainz Lucene `query`:
 
@@ -53,7 +53,7 @@ For recovery queries, write an array of objects to a JSON file. Each object iden
 uv run --no-sync python -m lb_mapper.cli.search_batch --source musicbrainz --input "$run/queries.json" --output "$run/musicbrainz.jsonl"
 ```
 
-An object with `recording_mbid` performs a MusicBrainz lookup with artist credits, releases, ISRCs, and work relationships. Copy target MBIDs from returned records and confirm every selected target with a successful canonical recording lookup before preparing actions. Preparation checks the selected MSID / target pairs against this MusicBrainz JSONL journal. One process owns MusicBrainz requests during a run. The client spaces requests by 1.1 seconds and resolves merged recording identifiers to their surviving ID. Use supported recording-index fields such as `recording`, `artist`, `artistname`, `release`, `isrc`, and `comment`. The recording index has no `composer` or `work` field. Search catalog and movement tokens in `recording`, then inspect work relationships to establish composer identity. An unsupported field returning zero results does not support deletion. See [MusicBrainz search fields](https://musicbrainz.org/doc/MusicBrainz_API/Search).
+An object with `recording_mbid` performs a MusicBrainz lookup with artist credits, releases, ISRCs, and work relationships. Copy target MBIDs from returned records and confirm every selected target with a successful canonical recording lookup before preparing actions. Preparation checks the selected MSID / target pairs against this MusicBrainz JSONL journal. One process owns MusicBrainz requests during a run. Use supported recording-index fields such as `recording`, `artist`, `artistname`, `release`, `isrc`, and `comment`. The recording index has no `composer` or `work` field. Search catalog and movement tokens in `recording`, then inspect work relationships to establish composer identity. An unsupported field returning zero results does not support deletion. See [MusicBrainz search fields](https://musicbrainz.org/doc/MusicBrainz_API/Search).
 
 Search records retain `result_count`, `result_offset`, and `next_offset` when further results exist. Narrow a broad query or request another page using its `offset` before concluding that no acceptable candidate exists.
 
@@ -102,7 +102,7 @@ uv run --no-sync python -m lb_mapper.cli.execute --input "$run/actions.json"
 uv run --no-sync python -m lb_mapper.cli.execute --input "$run/actions.json" --apply --output "$run/execution.jsonl"
 ```
 
-Only the `--apply` command mutates the account. It checks the token owner, rejects conflicting actions, confirms mappings through readback, and rechecks listen / mapping state before scheduling deletions. Re-review conflicts or unexpected state changes. An HTTP failure stops the batch and preserves the failed result. Pause account operations until a bounded health check succeeds, then rebuild the remaining plan from execution and verification records. Exclude confirmed mappings and accepted deletion requests. Read back ambiguous mutations before deciding whether to retry them.
+Only the `--apply` command mutates the account. Re-review conflicts or unexpected state changes. An HTTP failure stops the batch and preserves the failed result. Pause account operations until a bounded health check succeeds, then rebuild the remaining plan from execution and verification records. Exclude confirmed mappings and accepted deletion requests. Read back ambiguous mutations before deciding whether to retry them.
 
 Successful deletion submission completes the deployment milestone. Do not wait for queued deletions to disappear unless the user requests confirmed removal. For an independent mapping audit or requested deletion confirmation, run:
 
