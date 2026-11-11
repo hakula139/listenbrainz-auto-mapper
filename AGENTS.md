@@ -27,7 +27,7 @@ A recording MSID can occur many times. A mapping applies to that MSID, while del
 
 ## Development
 
-Keep runtime dependencies limited to `httpx` and `python-dotenv`. Each API module owns its HTTP client.
+Each API module owns its HTTP client.
 
 Account jobs share the main checkout's `.venv`, so never sync or change dependencies there while one may be running. Verify changes from a separate worktree with:
 
