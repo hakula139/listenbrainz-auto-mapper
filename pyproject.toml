@@ -33,14 +33,14 @@ lines-after-imports = 2
 split-on-trailing-comma = true
 combine-as-imports = true
 
+[tool.coverage.run]
+source = ["src"]
+
 [tool.pytest]
 minversion = "9.0"
 addopts = ["--quiet", "--cov", "--cov-report=term", "--cov-report=xml"]
 strict = true
 testpaths = ["tests"]
-
-[tool.coverage.run]
-source = ["src"]
 
 [tool.mypy]
 files = ["."]
