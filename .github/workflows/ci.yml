@@ -20,18 +20,14 @@ jobs:
       CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
   python:
-    name: Python Check
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Nix
-        uses: hakula139/devkit/.github/actions/setup-nix@v3
-
-      - name: Test
-        run: nix develop -c uv run --locked pytest -q
+    permissions:
+      contents: read
+      id-token: write
+    uses: hakula139/devkit/.github/workflows/python.yml@v3
+    with:
+      coverage: false
+    secrets:
+      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
   result:
     name: CI Result
@@ -42,6 +38,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       actions: read
+
     steps:
       - name: Check results
         uses: hakula139/devkit/.github/actions/ci-result@v3

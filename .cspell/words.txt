@@ -1,7 +1,6 @@
 artistname
 cachix
 capsys
-deadnix
 devkit
 direnv
 dotenv
@@ -29,7 +28,6 @@ rels
 romanizations
 shellcheck
 shfmt
-statix
 taplo
 testpaths
 typesense
