@@ -1,3 +1,4 @@
+addopts
 artistname
 cachix
 capsys
@@ -13,6 +14,7 @@ isrcs
 listenbrainz
 mbid
 mbids
+minversion
 msid
 musicbrainz
 mypy
@@ -22,7 +24,6 @@ nixpkgs
 pkgs
 pycache
 pytest
-pythonpath
 readback
 rels
 romanizations

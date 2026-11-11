@@ -1,5 +1,8 @@
 # lb-mapper
 
+[![CI](https://github.com/hakula139/listenbrainz-auto-mapper/actions/workflows/ci.yml/badge.svg)](https://github.com/hakula139/listenbrainz-auto-mapper/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/hakula139/listenbrainz-auto-mapper/graph/badge.svg)](https://codecov.io/gh/hakula139/listenbrainz-auto-mapper)
+
 Map unlinked [ListenBrainz](https://listenbrainz.org/) listens to [MusicBrainz](https://musicbrainz.org/) recordings and clean up listens that remain unmatched after research and final review.
 
 ## How it works
