@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -15,38 +14,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: Python Check
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+  nix:
+    uses: hakula139/devkit/.github/workflows/nix.yml@v3
+    secrets:
+      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v10.3.3
-        with:
-          enable-cache: true
-
-      - name: Install dependencies
-        run: uv sync --locked
-
-      - name: Pre-commit
-        run: uv run --no-sync pre-commit run --all-files
-
-      - name: Test
-        run: uv run --no-sync pytest -q
+  python:
+    permissions:
+      contents: read
+      id-token: write
+    uses: hakula139/devkit/.github/workflows/python.yml@v3
+    with:
+      coverage: false
+    secrets:
+      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
   result:
     name: CI Result
+    # A skipped required check passes, so the gate must run after failures too.
     if: ${{ !cancelled() }}
-    needs: [check]
+    needs: [nix, python]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       actions: read
+
     steps:
       - name: Check results
-        uses: hakula139/devkit/.github/actions/ci-result@v2
+        uses: hakula139/devkit/.github/actions/ci-result@v3

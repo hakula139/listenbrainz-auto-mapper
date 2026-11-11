@@ -1,6 +1,6 @@
 # AGENTS.md: lb-mapper
 
-Project-specific instructions for any coding assistant working in this repository. `CLAUDE.md` links to this file, and `.claude/skills` links to `.agents/skills`.
+lb-mapper maps unlinked ListenBrainz listens to MusicBrainz recordings through the `map-listens` skill in `.agents/skills`.
 
 ## Responsibilities
 
@@ -20,20 +20,18 @@ A recording MSID can occur many times. A mapping applies to that MSID, while del
 ## Contracts
 
 - Fail on malformed external responses. Search outages must remain distinguishable from a successful search with no results.
-- Validate the complete action batch before making requests. Check the configured user against the token owner before mutations.
+- `execute` validates the complete action batch before any request, and `--apply` checks that the configured user owns the token before mutating the account.
 - API acceptance of a deletion means it was scheduled. Confirm absence before reporting it as deleted.
 - Runtime snapshots and review evidence belong in the ignored `runs/` directory. Never write tokens to these artifacts.
 - `.env` is private. Check or consume credentials without printing their values.
 
 ## Development
 
-Use Python 3.12+, `uv`, single quotes, and the existing Ruff configuration. Keep runtime dependencies limited to `httpx` and `python-dotenv`. Each API module owns its HTTP client.
+Each API module owns its HTTP client.
 
-Run pre-commit before the behavioral tests:
+Account jobs share the main checkout's `.venv`, so never sync or change dependencies there while one may be running. Verify changes from a separate worktree with:
 
 ```bash
-uv run pre-commit run --all-files
-uv run pytest -q
+nix develop -c run-hooks
+nix develop -c uv run --locked pytest -q
 ```
-
-Load the shared Git Workflow skill for commits and publication.
