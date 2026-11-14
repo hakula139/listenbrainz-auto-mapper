@@ -9,7 +9,7 @@ Collect and process recent unlinked listen occurrences for `LB_USER`, using `LB_
 
 ## Authorization and review
 
-The coordinating agent owns final review. Honor authorization already given for mappings, deletions, and classical substitutions. If the user asks the agent to review and execute, perform that review and execute within that scope. Obtain any missing mutation authorization before applying actions.
+The coordinating agent owns final review and decisions, examining the actual candidates and sources for every proposed link, deletion, and classical substitution. Honor authorization already given for mappings, deletions, and classical substitutions. If the user asks the agent to review and execute, perform that review and execute within that scope. Obtain any missing mutation authorization before applying actions.
 
 The cleanup goal is best-effort matching followed by deletion of genuinely unresolved listens. Search errors and unfinished research remain pending. A successful search with no acceptable candidate can support deletion after independent MusicBrainz recovery and final review. Labs can return an empty result when its search backend fails, so a Labs miss alone never establishes absence. Script or language alone does not establish that a listen is unmatchable.
 
@@ -17,13 +17,19 @@ For classical music, another performer's recording is acceptable when it represe
 
 ## Run artifacts and commands
 
-Initialize the locked environment once with `uv sync --locked`, then run Python with `uv run --no-sync` from the repo root. Parallel workers must share that initialized environment without syncing dependencies during active jobs. Create an ignored `runs/<run-name>/` directory. Keep the snapshot, query results, evidence, decisions, action plan, and execution / verification records there.
+Enter the repository's Nix development shell with `nix develop` to provide the pinned Python and uv, then initialize the locked environment once with `uv sync --locked`. Run Python with `uv run --no-sync` from the repo root in that shell. Parallel workers must share that initialized environment without syncing dependencies during active jobs. Create an ignored `runs/<run-name>/` directory. Keep the snapshot, query results, evidence, decisions, action plan, and execution / verification records there.
 
 ```bash
 run=runs/<run-name>
 mkdir -p "$run"
-uv run --no-sync python -m lb_mapper.cli.fetch_listens COUNT --output "$run/listens.json"
-uv run --no-sync python -m lb_mapper.cli.lookup_batch --input "$run/listens.json" --output "$run/exact.jsonl"
+uv run \
+  --no-sync \
+  python -m lb_mapper.cli.fetch_listens COUNT --output "$run/listens.json"
+uv run \
+  --no-sync \
+  python -m lb_mapper.cli.lookup_batch \
+    --input "$run/listens.json" \
+    --output "$run/exact.jsonl"
 ```
 
 Keep ListenBrainz API and Labs requests in one process per run, including health probes and verification. The clients wait `LB_REQUEST_INTERVAL` seconds (`src/lb_mapper/__init__.py`) before each request. During service instability, raise it for the run and avoid concurrent retry loops. Research agents can work from saved artifacts while account operations remain serial.
@@ -31,8 +37,14 @@ Keep ListenBrainz API and Labs requests in one process per run, including health
 For large or sparse histories, use an enriched history export. ListenBrainz recommends the export API for complete history and the listens endpoint for recent listens, bounded queries, and incremental updates. An export job can be resumed using its saved state, and exported months are processed newest first:
 
 ```bash
-uv run --no-sync python -m lb_mapper.cli.export_history --output "$run/history.zip"
-uv run --no-sync python -m lb_mapper.cli.fetch_listens COUNT --export "$run/history.zip" --output "$run/listens.json"
+uv run \
+  --no-sync \
+  python -m lb_mapper.cli.export_history --output "$run/history.zip"
+uv run \
+  --no-sync \
+  python -m lb_mapper.cli.fetch_listens COUNT \
+    --export "$run/history.zip" \
+    --output "$run/listens.json"
 ```
 
 The search helper groups occurrences by MSID, preserving all occurrences under `listens`. Review conflicting metadata within a group before selecting one mapping.
@@ -42,7 +54,11 @@ The bulk lookup's canonical normalized candidate still needs identity review. Re
 Review lookup candidates, then write unresolved groups to `unresolved.json` and run fuzzy search. The input is an array of objects with `artist` and `track`, or a snapshot whose `unlinked` array keeps only the unresolved listens:
 
 ```bash
-uv run --no-sync python -m lb_mapper.cli.search_batch --input "$run/unresolved.json" --output "$run/labs.jsonl"
+uv run \
+  --no-sync \
+  python -m lb_mapper.cli.search_batch \
+    --input "$run/unresolved.json" \
+    --output "$run/labs.jsonl"
 ```
 
 Reusing the search output file resumes successful queries and retries failed ones. Never interpret `status: error` as no match.
@@ -50,7 +66,12 @@ Reusing the search output file resumes successful queries and retries failed one
 For recovery queries, write an array of objects to a JSON file. Each object identifies its `recording_msid` and either `artist` / `track` or an explicit MusicBrainz Lucene `query`:
 
 ```bash
-uv run --no-sync python -m lb_mapper.cli.search_batch --source musicbrainz --input "$run/queries.json" --output "$run/musicbrainz.jsonl"
+uv run \
+  --no-sync \
+  python -m lb_mapper.cli.search_batch \
+    --source musicbrainz \
+    --input "$run/queries.json" \
+    --output "$run/musicbrainz.jsonl"
 ```
 
 An object with `recording_mbid` performs a MusicBrainz lookup with artist credits, releases, ISRCs, and work relationships. A lookup of a merged recording returns its surviving ID, so copy target MBIDs from the returned records and confirm every selected target with a successful canonical recording lookup before preparing actions. Preparation checks the selected MSID / target pairs against this MusicBrainz JSONL journal. One process owns MusicBrainz requests during a run. Use supported recording-index fields such as `recording`, `artist`, `artistname`, `release`, `isrc`, and `comment`. The recording index has no `composer` or `work` field. Search catalog and movement tokens in `recording`, then inspect work relationships to establish composer identity. An unsupported field returning zero results does not support deletion. See [MusicBrainz search fields](https://musicbrainz.org/doc/MusicBrainz_API/Search).
@@ -75,13 +96,13 @@ For unresolved items, use the recovery angles justified by their metadata:
 - Search a verified source album with its artist aliases and inspect the returned release track titles and associated recordings. A release track can have a different title from its recording, so a recording-title miss can still have an exact album-track match.
 - Web research on MusicBrainz, the source album page, artist discography, or publisher catalog to resolve naming and work identity.
 
+Before proposing deletion, check a distinctive title without the original artist restriction, or use a verified alternate credit with release / catalog context when the title is generic. For romanized or translated source metadata, inspect the native source track listing and search its exact native title before concluding absence. Broaden localized-release searches to verified romanized titles, credited composers, ensembles, and source-album names. Review any partial or truncated search results before concluding absence.
+
 Record verified aliases with their context and source in the run evidence. Do not infer one-to-one title translations from a flat bidirectional cache.
 
-Use GPT-6 Luna (`gpt-6-luna`) for mapping-check agents. The coordinating agent reviews their evidence and owns final decisions. If that model is unavailable, report the limitation before choosing another model.
+Use GPT-6 Luna (`gpt-6-luna`) for mapping-check agents. If that model is unavailable, report the limitation before choosing another model.
 
-For large runs, native subagents can research disjoint MSID groups and propose decisions with evidence. Give each agent only its relevant snapshot and candidates, plus this skill. Keep agents read-only against ListenBrainz and give their output files distinct owners. Use the shared ACP Delegation skill only when consulting another configured assistant materially helps. Before proposing deletion, check a distinctive title without the original artist restriction, or use a verified alternate credit with release / catalog context when the title is generic. For romanized or translated source metadata, inspect the native source track listing and search its exact native title before concluding absence. Broaden localized-release searches to verified romanized titles, credited composers, ensembles, and source-album names. A second query constrained to the same original artist and translated release does not establish that recovery is complete. Review any partial or truncated search results before concluding absence.
-
-Every proposed deletion and classical substitution receives the coordinating agent's final review.
+For large runs, mapping-check agents can research disjoint MSID groups from saved artifacts and propose decisions with evidence. Keep them read-only against ListenBrainz.
 
 ## Decisions and execution
 
@@ -94,12 +115,23 @@ Write `decisions.json` as an array with exactly one entry for every snapshot MSI
 
 After a mapping conflict, look up the existing recording ID and review its canonical identity. To replace an existing mapping after that review, include `previous_recording_mbid` in the decision. Execution permits replacement of that observed ID. An absent mapping is created normally, and the new mapping is confirmed through readback. Another existing mapping remains a conflict.
 
-Reconcile all groups against the snapshot. Resolve conflicting choices for one MSID and check that every occurrence is covered. Evaluate the strongest candidates beyond an arbitrary top-five cutoff when later results provide better evidence. Final review must examine the actual candidates and sources, including proposed links, rather than merely accepting another agent's verdict.
+Reconcile all groups against the snapshot. Resolve conflicting choices for one MSID and check that every occurrence is covered.
 
 ```bash
-uv run --no-sync python -m lb_mapper.cli.prepare "$run/listens.json" "$run/decisions.json" --recordings "$run/musicbrainz.jsonl" --output "$run/actions.json"
-uv run --no-sync python -m lb_mapper.cli.execute --input "$run/actions.json"
-uv run --no-sync python -m lb_mapper.cli.execute --input "$run/actions.json" --apply --output "$run/execution.jsonl"
+uv run \
+  --no-sync \
+  python -m lb_mapper.cli.prepare "$run/listens.json" "$run/decisions.json" \
+    --recordings "$run/musicbrainz.jsonl" \
+    --output "$run/actions.json"
+uv run \
+  --no-sync \
+  python -m lb_mapper.cli.execute --input "$run/actions.json"
+uv run \
+  --no-sync \
+  python -m lb_mapper.cli.execute \
+    --input "$run/actions.json" \
+    --apply \
+    --output "$run/execution.jsonl"
 ```
 
 Only the `--apply` command mutates the account. It checks the token owner and rejects conflicting mappings or changed listen / mapping state, so re-review those before rebuilding the plan. An HTTP failure stops the batch and preserves the failed result. Pause account operations until a bounded health check succeeds, then rebuild the remaining plan from execution and verification records. Exclude confirmed mappings and accepted deletion requests. Read back ambiguous mutations before deciding whether to retry them.
@@ -107,7 +139,11 @@ Only the `--apply` command mutates the account. It checks the token owner and re
 Successful deletion submission completes the deployment milestone. Do not wait for queued deletions to disappear unless the user requests confirmed removal. For an independent mapping audit or requested deletion confirmation, run:
 
 ```bash
-uv run --no-sync python -m lb_mapper.cli.verify --input "$run/actions.json" --output "$run/verification.jsonl"
+uv run \
+  --no-sync \
+  python -m lb_mapper.cli.verify \
+    --input "$run/actions.json" \
+    --output "$run/verification.jsonl"
 ```
 
 Report mapped MSIDs, affected occurrences, substitutions, pending research, errors, and deletion states separately. `scheduled` means ListenBrainz accepted a deletion request. Deletions usually run shortly after the hour, so immediate readback can remain pending. Report a listen as deleted only after verification returns `absent`. Verification appends timestamped observations. Use the latest observation for each mapping MSID or deletion occurrence when reporting current state, including across resumed journals. Verification exits 2 while deletions remain pending, and 1 on errors or mismatched mappings. See the [ListenBrainz API contract](https://listenbrainz.readthedocs.io/en/latest/users/api/core.html) for history retrieval and deletion timing.

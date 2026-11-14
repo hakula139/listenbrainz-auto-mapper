@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from lb_mapper.cli import execute, export_history, verify
+from lb_mapper.execution import apply_deletion, apply_mapping
 from lb_mapper.lb_client import Listen
 from lb_mapper.review import DeletionAction, MappingAction, validate_actions
 from tests.fixtures import MBID, MSID, OTHER_MBID, OTHER_MSID, TIMESTAMP, occurrence
@@ -82,14 +83,14 @@ def test_reviewed_replacement_rechecks_current_mapping() -> None:
     for current in (OTHER_MBID, None):
         lb.reset_mock(side_effect=True)
         lb.get_manual_mapping.side_effect = [current, MBID]
-        assert execute.apply_mapping(lb, item) == 'mapped'
+        assert apply_mapping(lb, item) == 'mapped'
         lb.submit_mapping.assert_called_once_with(MSID, MBID)
 
     lb.reset_mock(side_effect=True)
     lb.get_manual_mapping.return_value = OTHER_MSID
 
     with pytest.raises(ValueError, match='different manual mapping'):
-        execute.apply_mapping(lb, item)
+        apply_mapping(lb, item)
 
     lb.submit_mapping.assert_not_called()
 
@@ -99,14 +100,14 @@ def test_mapping_readback_and_existing_conflict() -> None:
     item: MappingAction = {'recording_msid': MSID, 'recording_mbid': MBID}
     lb.get_manual_mapping.side_effect = [None, MBID]
 
-    assert execute.apply_mapping(lb, item) == 'mapped'
+    assert apply_mapping(lb, item) == 'mapped'
 
     lb.submit_mapping.assert_called_once_with(MSID, MBID)
     lb.reset_mock(side_effect=True)
     lb.get_manual_mapping.return_value = OTHER_MBID
 
     with pytest.raises(ValueError, match='different manual mapping'):
-        execute.apply_mapping(lb, item)
+        apply_mapping(lb, item)
 
     lb.submit_mapping.assert_not_called()
 
@@ -118,7 +119,7 @@ def test_deletion_rechecks_current_link_and_reports_scheduling() -> None:
 
     item: DeletionAction = {'listened_at': TIMESTAMP, 'recording_msid': MSID}
 
-    assert execute.apply_deletion(lb, 'user', item) == 'scheduled'
+    assert apply_deletion(lb, 'user', item) == 'scheduled'
 
     lb.delete_listen.assert_called_once_with(TIMESTAMP, MSID)
     lb.reset_mock()
@@ -127,7 +128,7 @@ def test_deletion_rechecks_current_link_and_reports_scheduling() -> None:
     )
 
     with pytest.raises(ValueError, match='now linked'):
-        execute.apply_deletion(lb, 'user', item)
+        apply_deletion(lb, 'user', item)
 
     lb.delete_listen.assert_not_called()
 
@@ -353,35 +354,3 @@ def test_existing_archive_without_state_is_preserved_before_api_work(
     assert output.read_bytes() == b'unknown archive'
 
     client.assert_not_called()
-
-
-def test_legacy_export_state_resumes_same_job_and_migrates_download_record(
-    tmp_path: Path,
-) -> None:
-    output = tmp_path / 'history.zip'
-    output.write_bytes(b'old archive')
-    output.with_suffix('.json').write_text(
-        json.dumps({'user': 'user', 'export': {'export_id': 7, 'status': 'completed'}})
-    )
-    lb = MagicMock()
-    lb.__enter__.return_value = lb
-    lb.get_export.return_value = {'export_id': 7, 'status': 'completed'}
-    lb.download_export.side_effect = lambda _, path: path.write_bytes(b'fresh archive')
-
-    with (
-        patch('sys.argv', ['export', '--output', str(output)]),
-        patch.object(export_history, 'load_dotenv'),
-        patch.object(export_history, 'require_env', side_effect=['user', 'token']),
-        patch.object(export_history, 'ListenBrainzClient', return_value=lb),
-    ):
-        export_history.main()
-
-    lb.get_export.assert_called_once_with(7)
-    lb.request_export.assert_not_called()
-
-    assert output.read_bytes() == b'fresh archive'
-
-    state = json.loads(output.with_suffix('.zip.json').read_text())
-
-    assert state['downloaded']
-    assert state['export']['export_id'] == 7

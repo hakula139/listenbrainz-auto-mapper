@@ -4,30 +4,19 @@ lb-mapper maps unlinked ListenBrainz listens to MusicBrainz recordings through t
 
 ## Responsibilities
 
-The shared `map-listens` skill owns matching judgment, research, final review, and authorization. Python owns API calls, grouping, validation, and execution records. Keep artist aliases and musical identity reasoning in the skill.
-
-- `lb_client.py` owns authenticated ListenBrainz operations and rate limits.
-- `lb_search.py` owns LB Labs search and bulk recording lookup.
-- `mb_search.py` owns MusicBrainz search and recording lookup. A single process must own MusicBrainz calls during a run to respect its shared rate limit.
-- `history.py` reads enriched history exports newest first.
-- `review.py` groups occurrences by MSID and requires complete decisions before preparing actions.
-- `execution.py` applies and verifies reviewed actions against current account state.
-- `artifacts.py` owns atomic snapshots and append-only evidence files.
-- `cli/` communicates using JSON snapshots and JSONL search / execution records. Progress goes to stderr.
+The shared `map-listens` skill owns matching judgment, research, final review, and authorization. Python owns API calls, grouping, validation, and execution records. Each API module owns its HTTP client. Keep artist aliases and musical identity reasoning in the skill.
 
 A recording MSID can occur many times. A mapping applies to that MSID, while deletion targets an individual `(listened_at, recording_msid)` occurrence. Preserve submitted metadata when linking.
 
 ## Contracts
 
+- CLI snapshots use JSON and search / execution records use JSONL. Progress goes to stderr.
 - Fail on malformed external responses. Search outages must remain distinguishable from a successful search with no results.
 - `execute` validates the complete action batch before any request, and `--apply` checks that the configured user owns the token before mutating the account.
 - API acceptance of a deletion means it was scheduled. Confirm absence before reporting it as deleted.
 - Runtime snapshots and review evidence belong in the ignored `runs/` directory. Never write tokens to these artifacts.
-- `.env` is private. Check or consume credentials without printing their values.
 
 ## Development
-
-Each API module owns its HTTP client.
 
 Account jobs share the main checkout's `.venv`, so never sync or change dependencies there while one may be running. Verify changes from a separate worktree with:
 

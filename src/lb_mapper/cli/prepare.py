@@ -6,7 +6,8 @@ import argparse
 import json
 from pathlib import Path
 
-from lb_mapper.cli import read_json, validate_paths, write_json
+from lb_mapper.artifacts import read_json, write_json
+from lb_mapper.cli import validate_paths
 from lb_mapper.review import prepare_actions, validate_recording_lookups
 
 

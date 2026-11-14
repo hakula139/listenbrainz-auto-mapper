@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, TextIO
 
-from lb_mapper.cli import repair_jsonl, write_record
+from lb_mapper.artifacts import repair_jsonl, write_record
 from lb_mapper.review import canonical_lookup
 
 
