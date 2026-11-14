@@ -12,5 +12,5 @@
     }
   ],
   "dictionaries": ["project-words"],
-  "ignorePaths": ["flake.lock", "uv.lock"]
+  "ignorePaths": [".git", "flake.lock", "uv.lock"]
 }
