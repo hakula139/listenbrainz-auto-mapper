@@ -19,8 +19,7 @@ Large history scans use the official ListenBrainz export API. Snapshots, candida
 
 ## Requirements
 
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/)
+- Nix with flakes enabled, providing pinned Python and uv through the development shell
 - Codex or Claude Code
 - A [ListenBrainz API token](https://listenbrainz.org/settings/)
 
@@ -29,6 +28,7 @@ Large history scans use the official ListenBrainz export API. Snapshots, candida
 ```bash
 git clone https://github.com/hakula139/listenbrainz-auto-mapper.git
 cd listenbrainz-auto-mapper
+nix develop
 uv sync --locked
 cp .env.example .env
 # Set LB_USER and LB_TOKEN in .env

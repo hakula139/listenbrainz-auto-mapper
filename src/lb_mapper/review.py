@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from typing import Any, NotRequired, TypedDict
 
 from lb_mapper.mb_search import validate_recording
-from lb_mapper.validation import uuid_string as uuid_string
+from lb_mapper.validation import uuid_string
 
 
 class MappingAction(TypedDict):

@@ -10,10 +10,11 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from lb_mapper.cli import require_env, validate_paths, write_json
+from lb_mapper.artifacts import write_json
+from lb_mapper.cli import require_env, validate_paths
 from lb_mapper.history import iter_export
 from lb_mapper.lb_client import ListenBrainzClient
-from lb_mapper.review import uuid_string
+from lb_mapper.validation import uuid_string
 
 
 def main() -> None:

@@ -8,13 +8,6 @@ import sys
 from itertools import combinations
 from pathlib import Path
 
-from lb_mapper.artifacts import (
-    read_json as read_json,
-    repair_jsonl as repair_jsonl,
-    write_json as write_json,
-    write_record as write_record,
-)
-
 
 def validate_paths(parser: argparse.ArgumentParser, *paths: Path | None) -> None:
     """Reject artifact paths that resolve to the same file."""

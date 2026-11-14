@@ -171,21 +171,6 @@ class ListenBrainzClient:
             # The seen set deduplicates entries already yielded.
             max_ts = boundary_ts + 1
 
-    def fetch_listens(
-        self, user: str, count: int = 50, max_ts: int | None = None
-    ) -> list[Listen]:
-        """Fetch *count* recent listens."""
-        if count < 1:
-            raise ValueError('count must be positive')
-
-        result: list[Listen] = []
-        for listen in self.iter_listens(user, max_ts):
-            result.append(listen)
-            if len(result) >= count:
-                break
-
-        return result
-
     def get_listen(
         self, user: str, listened_at: int, recording_msid: str
     ) -> Listen | None:

@@ -9,7 +9,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from lb_mapper.cli import read_json, require_env, validate_paths, write_json
+from lb_mapper.artifacts import read_json, write_json
+from lb_mapper.cli import require_env, validate_paths
 from lb_mapper.lb_client import ListenBrainzClient
 
 
@@ -20,16 +21,7 @@ def main() -> None:
     state_path = args.output.with_suffix(args.output.suffix + '.json')
     validate_paths(parser, args.output, state_path)
 
-    saved_path = state_path if state_path.exists() else None
-    legacy_path = args.output.with_suffix('.json')
-    if (
-        saved_path is None
-        and legacy_path.resolve() != args.output.resolve()
-        and legacy_path.exists()
-    ):
-        saved_path = legacy_path
-
-    if args.output.exists() and saved_path is None:
+    if args.output.exists() and not state_path.exists():
         parser.error('Existing archive has no export state. Choose another output path')
 
     load_dotenv()
@@ -39,8 +31,8 @@ def main() -> None:
     with ListenBrainzClient(require_env('LB_TOKEN')) as lb:
         lb.validate_token(user)
 
-        if saved_path is not None:
-            saved = read_json(saved_path)
+        if state_path.exists():
+            saved = read_json(state_path)
             if saved['user'] != user:
                 parser.error('Export state does not belong to LB_USER')
             state = lb.get_export(saved['export']['export_id'])

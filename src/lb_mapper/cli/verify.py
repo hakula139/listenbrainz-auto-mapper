@@ -12,13 +12,8 @@ from typing import Any, cast
 import httpx
 from dotenv import load_dotenv
 
-from lb_mapper.cli import (
-    read_json,
-    repair_jsonl,
-    require_env,
-    validate_paths,
-    write_record,
-)
+from lb_mapper.artifacts import read_json, repair_jsonl, write_record
+from lb_mapper.cli import require_env, validate_paths
 from lb_mapper.execution import verify_deletion, verify_mapping
 from lb_mapper.lb_client import ListenBrainzClient
 from lb_mapper.review import DeletionAction, MappingAction, validate_actions
